@@ -14,10 +14,7 @@
   },
   "dependencies": {
     "@ai-sdk/deepseek": "^2.0.39",
-    "@vercel/connect": "0.2.2",
-    "ai": "7.0.0-beta.178",
-    "eve": "^0.11.6",
-    "zod": "4.4.3",
+    "@letta-ai/letta-code-sdk": "^0.1.14",
     "@radix-ui/react-use-controllable-state": "1.2.2",
     "@shikijs/core": "4.1.0",
     "@shikijs/engine-javascript": "4.1.0",
@@ -27,10 +24,14 @@
     "@streamdown/math": "1.0.2",
     "@streamdown/mermaid": "1.0.2",
     "@tailwindcss/postcss": "4.3.0",
+    "@vercel/connect": "0.2.2",
+    "ai": "7.0.0-beta.178",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "cmdk": "1.1.1",
+    "eve": "^0.11.6",
     "lucide-react": "1.16.0",
+    "microsandbox": "^0.5.7",
     "motion": "12.40.0",
     "nanoid": "5.1.11",
     "next": "16.2.6",
@@ -41,8 +42,8 @@
     "streamdown": "2.5.0",
     "tailwind-merge": "3.6.0",
     "tailwindcss": "4.3.0",
-    "microsandbox": "^0.5.7",
-    "use-stick-to-bottom": "1.1.4"
+    "use-stick-to-bottom": "1.1.4",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "24.x",
