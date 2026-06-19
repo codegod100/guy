@@ -1,0 +1,4 @@
+#!/bin/sh
+# NixOS wrapper: runs the microsandbox binary through steam-run
+# because glibc-linked binaries can't run against the musl stub ld.
+exec steam-run /home/nandi/.bun/install/global/node_modules/@superradcompany/microsandbox-linux-x64-gnu/bin/msb "$@"

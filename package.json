@@ -41,13 +41,14 @@
     "streamdown": "2.5.0",
     "tailwind-merge": "3.6.0",
     "tailwindcss": "4.3.0",
+    "microsandbox": "^0.5.7",
     "use-stick-to-bottom": "1.1.4"
   },
   "devDependencies": {
     "@types/node": "24.x",
-    "@typescript/native-preview": "7.0.0-dev.20260523.1",
     "@types/react": "19.2.15",
-    "@types/react-dom": "19.2.3"
+    "@types/react-dom": "19.2.3",
+    "@typescript/native-preview": "7.0.0-dev.20260523.1"
   },
   "overrides": {
     "ai": "7.0.0-beta.178"
