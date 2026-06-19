@@ -10,3 +10,8 @@ node_modules
 dist
 .DS_Store
 *.tsbuildinfo
+
+# Per-machine Letta state (agent ID, CLI local settings, NixOS wrappers)
+.letta/agent-id
+.letta/settings.local.json
+.local/bin/msb
