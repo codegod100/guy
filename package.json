@@ -10,7 +10,8 @@
     "build": "next build",
     "dev": "next dev",
     "start": "next start",
-    "typecheck": "tsgo --noEmit -p tsconfig.json"
+    "typecheck": "tsgo --noEmit -p tsconfig.json",
+    "prepare": "node scripts/inline-letta-cli.mjs"
   },
   "dependencies": {
     "@ai-sdk/deepseek": "^2.0.39",
