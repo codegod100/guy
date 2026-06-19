@@ -26,28 +26,16 @@ const AGENTS_ROOT = path.join(os.homedir(), ".letta", "agents");
 const LETTA_GIT_BASE = "https://api.letta.com/v1/git";
 
 function dumpVercelFs(): void {
-  const dirs = [
-    "/var/task/node_modules/@letta-ai",
-    "/var/task/_libs",
-    "/var/task/node_modules",
-  ];
   const lines: string[] = [];
-  for (const dir of dirs) {
+
+  // Top-level /var/task layout (capped to keep the log line readable, but the
+  // cap is generous so we almost never hit it).
+  for (const dir of ["/var/task"]) {
     try {
-      const entries = readdirSync(dir);
-      const preview = entries
-        .slice(0, 40)
-        .map((e: string) => {
-          if (e.startsWith("@")) return `${e}/`;
-          try {
-            return statSync(path.join(dir, e)).isDirectory() ? `${e}/` : e;
-          } catch {
-            return e;
-          }
-        })
-        .join(", ");
+      const entries = readdirSync(dir).sort();
+      const preview = entries.slice(0, 100);
       lines.push(
-        `${dir}/: [${preview}${entries.length > 40 ? `, +${entries.length - 40} more` : ""}]`,
+        `${dir}/: [${preview.join(", ")}${entries.length > 100 ? `, +${entries.length - 100} more` : ""}]`,
       );
     } catch (err) {
       lines.push(
@@ -55,14 +43,65 @@ function dumpVercelFs(): void {
       );
     }
   }
-  for (const c of [
-    "/var/task/node_modules/@letta-ai/letta-code/letta.js",
-    "/var/task/node_modules/@letta-ai/letta-code",
-    "/var/task/_libs/letta-ai__letta-code.mjs",
-    "/var/task/_libs/@letta-ai/letta-code/letta.js",
-  ]) {
-    lines.push(`${c}: ${existsSync(c) ? "EXISTS" : "missing"}`);
+
+  // Full _libs listing (Nitro's external-dep output, with no truncation).
+  for (const dir of ["/var/task/_libs", "/var/task/_libs/@letta-ai"]) {
+    try {
+      const entries = readdirSync(dir).sort();
+      lines.push(`${dir}/ (${entries.length}): [${entries.join(", ")}]`);
+    } catch (err) {
+      lines.push(
+        `${dir}/: <${(err as NodeJS.ErrnoException).code ?? "error"}>`,
+      );
+    }
   }
+
+  // node_modules — only probe relevant subtrees so we don't dump the world.
+  for (const dir of [
+    "/var/task/node_modules",
+    "/var/task/node_modules/@letta-ai",
+    "/var/task/node_modules/@letta-ai/letta-code",
+  ]) {
+    try {
+      const entries = readdirSync(dir).sort();
+      lines.push(`${dir}/ (${entries.length}): [${entries.join(", ")}]`);
+    } catch (err) {
+      lines.push(
+        `${dir}/: <${(err as NodeJS.ErrnoException).code ?? "error"}>`,
+      );
+    }
+  }
+
+  // Recursive walk under /var/task to find any path that mentions "letta".
+  // Bounded depth + skip _libs internals to stay fast.
+  const hits: string[] = [];
+  const walk = (dir: string, depth: number) => {
+    if (depth > 4) return;
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e === "node_modules" || e === ".vercel" || e === ".next") continue;
+      const full = path.join(dir, e);
+      let isDir = false;
+      try {
+        isDir = statSync(full).isDirectory();
+      } catch {
+        continue;
+      }
+      if (e.toLowerCase().includes("letta"))
+        hits.push(full + (isDir ? "/" : ""));
+      if (isDir) walk(full, depth + 1);
+    }
+  };
+  walk("/var/task", 0);
+  lines.push(
+    `letta hits under /var/task: [${hits.length === 0 ? "none" : hits.join(", ")}]`,
+  );
+
   console.log(`[letta-memory] VERCEL FS PROBE:\n  ${lines.join("\n  ")}`);
 }
 
