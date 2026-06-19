@@ -26,54 +26,32 @@ const AGENTS_ROOT = path.join(os.homedir(), ".letta", "agents");
 const LETTA_GIT_BASE = "https://api.letta.com/v1/git";
 
 function dumpVercelFs(): void {
-  const lines: string[] = [];
+  const tag = "[letta-memory] FS-PROBE";
+  const log = (msg: string) => console.log(`${tag} ${msg}`);
 
-  // Top-level /var/task layout (capped to keep the log line readable, but the
-  // cap is generous so we almost never hit it).
-  for (const dir of ["/var/task"]) {
+  const list = (dir: string): string => {
     try {
       const entries = readdirSync(dir).sort();
-      const preview = entries.slice(0, 100);
-      lines.push(
-        `${dir}/: [${preview.join(", ")}${entries.length > 100 ? `, +${entries.length - 100} more` : ""}]`,
-      );
+      return entries.join(", ");
     } catch (err) {
-      lines.push(
-        `${dir}/: <${(err as NodeJS.ErrnoException).code ?? "error"}>`,
-      );
+      return `<${(err as NodeJS.ErrnoException).code ?? "error"}>`;
     }
-  }
+  };
 
-  // Full _libs listing (Nitro's external-dep output, with no truncation).
-  for (const dir of ["/var/task/_libs", "/var/task/_libs/@letta-ai"]) {
-    try {
-      const entries = readdirSync(dir).sort();
-      lines.push(`${dir}/ (${entries.length}): [${entries.join(", ")}]`);
-    } catch (err) {
-      lines.push(
-        `${dir}/: <${(err as NodeJS.ErrnoException).code ?? "error"}>`,
-      );
-    }
-  }
+  log("/var/task/ = " + list("/var/task"));
+  log("/var/task/_libs/ = " + list("/var/task/_libs"));
+  log("/var/task/_libs/@letta-ai/ = " + list("/var/task/_libs/@letta-ai"));
+  log("/var/task/node_modules/ = " + list("/var/task/node_modules"));
+  log(
+    "/var/task/node_modules/@letta-ai/ = " +
+      list("/var/task/node_modules/@letta-ai"),
+  );
+  log(
+    "/var/task/node_modules/@letta-ai/letta-code/ = " +
+      list("/var/task/node_modules/@letta-ai/letta-code"),
+  );
 
-  // node_modules — only probe relevant subtrees so we don't dump the world.
-  for (const dir of [
-    "/var/task/node_modules",
-    "/var/task/node_modules/@letta-ai",
-    "/var/task/node_modules/@letta-ai/letta-code",
-  ]) {
-    try {
-      const entries = readdirSync(dir).sort();
-      lines.push(`${dir}/ (${entries.length}): [${entries.join(", ")}]`);
-    } catch (err) {
-      lines.push(
-        `${dir}/: <${(err as NodeJS.ErrnoException).code ?? "error"}>`,
-      );
-    }
-  }
-
-  // Recursive walk under /var/task to find any path that mentions "letta".
-  // Bounded depth + skip _libs internals to stay fast.
+  // Recursive walk under /var/task for any path containing "letta".
   const hits: string[] = [];
   const walk = (dir: string, depth: number) => {
     if (depth > 4) return;
@@ -98,11 +76,22 @@ function dumpVercelFs(): void {
     }
   };
   walk("/var/task", 0);
-  lines.push(
-    `letta hits under /var/task: [${hits.length === 0 ? "none" : hits.join(", ")}]`,
-  );
+  log("letta hits: " + (hits.length === 0 ? "none" : hits.join(" | ")));
 
-  console.log(`[letta-memory] VERCEL FS PROBE:\n  ${lines.join("\n  ")}`);
+  // Also check whether the SDK thinks it can resolve the package via
+  // createRequire(import.meta.url), since that's the path the SDK takes
+  // before throwing.
+  try {
+    const { createRequire } =
+      require("node:module") as typeof import("node:module");
+    const r = createRequire(import.meta.url);
+    const resolved = r.resolve("@letta-ai/letta-code");
+    log(`SDK require.resolve("@letta-ai/letta-code") = ${resolved}`);
+  } catch (err) {
+    log(
+      `SDK require.resolve("@letta-ai/letta-code") THREW: ${(err as Error).message.split("\n")[0]}`,
+    );
+  }
 }
 
 function locateCli(): string | null {
