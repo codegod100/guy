@@ -1,7 +1,7 @@
 import { createAgent, prompt } from "@letta-ai/letta-code-sdk";
 import { defineTool } from "eve/tools";
 import { spawn } from "node:child_process";
-import { existsSync, promises as fs } from "node:fs";
+import { existsSync, promises as fs, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
@@ -25,7 +25,52 @@ const AGENT_ID_FILE = path.join(PROJECT_ROOT, ".letta", "agent-id");
 const AGENTS_ROOT = path.join(os.homedir(), ".letta", "agents");
 const LETTA_GIT_BASE = "https://api.letta.com/v1/git";
 
+function dumpVercelFs(): void {
+  const dirs = [
+    "/var/task/node_modules/@letta-ai",
+    "/var/task/_libs",
+    "/var/task/node_modules",
+  ];
+  const lines: string[] = [];
+  for (const dir of dirs) {
+    try {
+      const entries = readdirSync(dir);
+      const preview = entries
+        .slice(0, 40)
+        .map((e: string) => {
+          if (e.startsWith("@")) return `${e}/`;
+          try {
+            return statSync(path.join(dir, e)).isDirectory() ? `${e}/` : e;
+          } catch {
+            return e;
+          }
+        })
+        .join(", ");
+      lines.push(
+        `${dir}/: [${preview}${entries.length > 40 ? `, +${entries.length - 40} more` : ""}]`,
+      );
+    } catch (err) {
+      lines.push(
+        `${dir}/: <${(err as NodeJS.ErrnoException).code ?? "error"}>`,
+      );
+    }
+  }
+  for (const c of [
+    "/var/task/node_modules/@letta-ai/letta-code/letta.js",
+    "/var/task/node_modules/@letta-ai/letta-code",
+    "/var/task/_libs/letta-ai__letta-code.mjs",
+    "/var/task/_libs/@letta-ai/letta-code/letta.js",
+  ]) {
+    lines.push(`${c}: ${existsSync(c) ? "EXISTS" : "missing"}`);
+  }
+  console.log(`[letta-memory] VERCEL FS PROBE:\n  ${lines.join("\n  ")}`);
+}
+
 function locateCli(): string | null {
+  if (process.env.VERCEL === "1") {
+    dumpVercelFs();
+  }
+
   if (process.env.LETTA_CLI_PATH) {
     if (existsSync(process.env.LETTA_CLI_PATH)) {
       console.log(
