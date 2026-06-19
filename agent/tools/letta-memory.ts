@@ -1,6 +1,7 @@
 import { createAgent, prompt } from "@letta-ai/letta-code-sdk";
 import { defineTool } from "eve/tools";
-import { promises as fs } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
@@ -22,6 +23,71 @@ let _agentId: string | null = null;
 const PROJECT_ROOT = process.cwd();
 const AGENT_ID_FILE = path.join(PROJECT_ROOT, ".letta", "agent-id");
 const AGENTS_ROOT = path.join(os.homedir(), ".letta", "agents");
+const LETTA_GIT_BASE = "https://api.letta.com/v1/git";
+
+function locateCli(): string | null {
+  if (process.env.LETTA_CLI_PATH) {
+    if (existsSync(process.env.LETTA_CLI_PATH)) {
+      console.log(
+        `[letta-memory] CLI from LETTA_CLI_PATH=${process.env.LETTA_CLI_PATH}`,
+      );
+      return process.env.LETTA_CLI_PATH;
+    }
+    console.warn(
+      `[letta-memory] LETTA_CLI_PATH=${process.env.LETTA_CLI_PATH} set but file not found`,
+    );
+  }
+
+  // The SDK resolves the CLI via `require.resolve("@letta-ai/letta-code")` from
+  // its own import.meta.url. In a bundled environment (Vercel) that URL is
+  // virtual, so resolution fails. We pre-compute the path here and set
+  // LETTA_CLI_PATH so the SDK picks it up on its first lookup.
+  //
+  // Search order:
+  //   1. Walk up from cwd looking for node_modules/@letta-ai/letta-code/letta.js
+  //      (handles local dev, monorepos, and the Vercel case where cwd is /var/task)
+  //   2. A few last-resort fixed paths in case node_modules isn't where we expect
+
+  let dir = process.cwd();
+  for (let i = 0; i < 6; i++) {
+    const candidate = path.join(
+      dir,
+      "node_modules",
+      "@letta-ai",
+      "letta-code",
+      "letta.js",
+    );
+    if (existsSync(candidate)) {
+      console.log(`[letta-memory] CLI located via walk-up: ${candidate}`);
+      return candidate;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+
+  for (const c of [
+    "/var/task/node_modules/@letta-ai/letta-code/letta.js",
+    "/var/task/.next/server/node_modules/@letta-ai/letta-code/letta.js",
+  ]) {
+    if (existsSync(c)) {
+      console.log(`[letta-memory] CLI located via fixed path: ${c}`);
+      return c;
+    }
+  }
+
+  console.warn(
+    `[letta-memory] could not locate Letta Code CLI. cwd=${process.cwd()}, ` +
+      `node-exists=${existsSync(process.execPath)}, ` +
+      `LETTA_CLI_PATH=${process.env.LETTA_CLI_PATH ?? "<unset>"}`,
+  );
+  return null;
+}
+
+const CLI_PATH = locateCli();
+if (CLI_PATH) {
+  process.env.LETTA_CLI_PATH = CLI_PATH;
+}
 
 function projectHash(projectPath: string): string {
   return crypto
@@ -66,12 +132,96 @@ async function writeProjectSidecar(agentId: string): Promise<void> {
   await fs.writeFile(sidecar, JSON.stringify(payload, null, 2) + "\n", "utf8");
 }
 
-async function agentExists(agentId: string): Promise<boolean> {
+function memfsDir(agentId: string): string {
+  return path.join(AGENTS_ROOT, agentId, "memory");
+}
+
+function runGit(args: string[], opts: { cwd?: string } = {}): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", args, {
+      cwd: opts.cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.on("data", (d) => (stderr += d.toString()));
+    child.on("error", reject);
+    child.on("exit", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`git ${args.join(" ")} exited ${code}: ${stderr}`));
+    });
+  });
+}
+
+async function agentExistsRemotely(agentId: string): Promise<boolean> {
+  const apiKey = process.env.LETTA_API_KEY;
+  if (!apiKey) return false;
   try {
-    await fs.access(path.join(AGENTS_ROOT, agentId, "memory"));
+    const authUrl = `https://letta:${encodeURIComponent(apiKey)}@api.letta.com/v1/git/${agentId}/state.git`;
+    await runGit(["ls-remote", "--heads", authUrl]);
     return true;
   } catch {
     return false;
+  }
+}
+
+async function hydrateMemfs(agentId: string): Promise<boolean> {
+  const apiKey = process.env.LETTA_API_KEY;
+  if (!apiKey) return false;
+
+  // Bail early if the remote is gone, so we don't leave an empty/partial local dir.
+  if (!(await agentExistsRemotely(agentId))) return false;
+
+  const dir = memfsDir(agentId);
+  const authUrl = `https://letta:${encodeURIComponent(apiKey)}@api.letta.com/v1/git/${agentId}/state.git`;
+
+  try {
+    await fs.mkdir(path.dirname(dir), { recursive: true });
+    await runGit(["clone", authUrl, dir]);
+  } catch (err) {
+    console.warn(`[letta-memory] failed to clone memfs for ${agentId}:`, err);
+    return false;
+  }
+
+  // Add a persistent credential helper so future push/pull on this clone works
+  // without re-injecting creds into the URL. We intentionally leave the embedded
+  // creds in the URL alone: stripping is fragile (if the strip succeeds but the
+  // helper write below fails, push would break), and the file is local-only and
+  // ephemeral on Vercel, so the plaintext API key isn't a real concern.
+  try {
+    await persistCredentialHelper(dir);
+  } catch (err) {
+    console.warn(
+      `[letta-memory] failed to add credential helper for ${agentId}:`,
+      err,
+    );
+  }
+
+  return true;
+}
+
+async function persistCredentialHelper(memfsDir: string): Promise<void> {
+  const apiKey = process.env.LETTA_API_KEY;
+  if (!apiKey) return;
+  const configPath = path.join(memfsDir, ".git", "config");
+  const raw = await fs.readFile(configPath, "utf8");
+  if (raw.includes('[credential "https://api.letta.com"]')) return;
+
+  const helper = `!f() { echo \\"username=letta\\"; echo \\"password=${apiKey}\\"; }; f`;
+  await fs.appendFile(
+    configPath,
+    `\n[credential "https://api.letta.com"]\n\thelper = "${helper}"\n`,
+    "utf8",
+  );
+}
+
+async function resolveAgent(
+  agentId: string,
+): Promise<"local" | "hydrated" | "missing"> {
+  try {
+    await fs.access(memfsDir(agentId));
+    return "local";
+  } catch {
+    return (await hydrateMemfs(agentId)) ? "hydrated" : "missing";
   }
 }
 
@@ -85,16 +235,20 @@ async function ensureAgent(): Promise<string> {
 
   let agentId: string | undefined;
   let source: "env" | "file" | "new" = "new";
+  let hydrated = false;
 
-  // 1. Explicit env override wins (still validated — a stale env var shouldn't block creation).
+  // 1. Explicit env override wins. A stale or missing agent falls through after
+  // attempting to hydrate its memfs from Letta Cloud.
   if (process.env.LETTA_AGENT_ID?.trim()) {
     const envId = process.env.LETTA_AGENT_ID.trim();
-    if (await agentExists(envId)) {
+    const r = await resolveAgent(envId);
+    if (r !== "missing") {
       agentId = envId;
       source = "env";
+      hydrated = r === "hydrated";
     } else {
       console.warn(
-        `[letta-memory] env LETTA_AGENT_ID=${envId} no longer exists; falling back to file/creation.`,
+        `[letta-memory] env LETTA_AGENT_ID=${envId} could not be resolved locally or on Letta Cloud; falling back.`,
       );
     }
   }
@@ -103,12 +257,14 @@ async function ensureAgent(): Promise<string> {
   if (!agentId) {
     const persisted = await readPersistedAgentId();
     if (persisted) {
-      if (await agentExists(persisted)) {
+      const r = await resolveAgent(persisted);
+      if (r !== "missing") {
         agentId = persisted;
         source = "file";
+        hydrated = r === "hydrated";
       } else {
         console.warn(
-          `[letta-memory] persisted agent ${persisted} no longer exists; creating a new one.`,
+          `[letta-memory] persisted agent ${persisted} could not be resolved locally or on Letta Cloud; creating a new one.`,
         );
       }
     }
@@ -141,6 +297,11 @@ async function ensureAgent(): Promise<string> {
   if (source === "new") {
     console.log(
       `[letta-memory] created new agent ${agentId} for ${PROJECT_ROOT}`,
+    );
+  }
+  if (hydrated) {
+    console.log(
+      `[letta-memory] hydrated memfs for ${agentId} from ${LETTA_GIT_BASE}/${agentId}/state.git`,
     );
   }
   return agentId;
