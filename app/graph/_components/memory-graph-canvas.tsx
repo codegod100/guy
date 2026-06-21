@@ -181,27 +181,57 @@ export function MemoryGraphCanvas() {
 
   const normalizedSearch = search.trim().toLowerCase();
 
-  const filteredNodes = useMemo(() => {
-    if (!graph) return [];
-    return graph.nodes.filter(
+  const {
+    filteredNodes,
+    filteredNodeIds,
+    filteredEdges,
+    relatedEdges,
+    typeTotals,
+  } = useMemo(() => {
+    if (!graph) {
+      return {
+        filteredNodes: [],
+        filteredNodeIds: new Set<string>(),
+        filteredEdges: [],
+        relatedEdges: [] as MemoryGraphEdge[],
+        typeTotals: Object.fromEntries(
+          ALL_NODE_TYPES.map((t) => [t, 0]),
+        ) as Record<MemoryGraphNodeType, number>,
+      };
+    }
+
+    const nodes = graph.nodes.filter(
       (node) =>
         activeTypes.includes(node.type) && matchesQuery(node, normalizedSearch),
     );
-  }, [activeTypes, graph, normalizedSearch]);
-
-  const filteredNodeIds = useMemo(
-    () => new Set(filteredNodes.map((node) => node.id)),
-    [filteredNodes],
-  );
-
-  const filteredEdges = useMemo(() => {
-    if (!graph) return [];
-    return graph.edges.filter(
-      (edge) =>
-        filteredNodeIds.has(edge.source) && filteredNodeIds.has(edge.target),
+    const nodeIds = new Set(nodes.map((node) => node.id));
+    const edges = graph.edges.filter(
+      (edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target),
     );
-  }, [filteredNodeIds, graph]);
 
+    const totals = Object.fromEntries(
+      ALL_NODE_TYPES.map((t) => [t, 0]),
+    ) as Record<MemoryGraphNodeType, number>;
+    for (const node of nodes) {
+      totals[node.type] += 1;
+    }
+
+    const related = selectedId
+      ? edges.filter(
+          (edge) => edge.source === selectedId || edge.target === selectedId,
+        )
+      : [];
+
+    return {
+      filteredNodes: nodes,
+      filteredNodeIds: nodeIds,
+      filteredEdges: edges,
+      relatedEdges: related,
+      typeTotals: totals,
+    };
+  }, [activeTypes, graph, normalizedSearch, selectedId]);
+
+  // Auto-select first node when filters change and current selection is gone
   useEffect(() => {
     if (!filteredNodes.length) {
       setSelectedId(null);
@@ -211,20 +241,6 @@ export function MemoryGraphCanvas() {
     if (selectedId && filteredNodeIds.has(selectedId)) return;
     setSelectedId(filteredNodes[0]?.id ?? null);
   }, [filteredNodeIds, filteredNodes, selectedId]);
-
-  const relatedEdges = useMemo(() => {
-    if (!selectedId) return [];
-    return filteredEdges.filter(
-      (edge) => edge.source === selectedId || edge.target === selectedId,
-    );
-  }, [filteredEdges, selectedId]);
-
-  const typeTotals = useMemo(() => {
-    const totals: Partial<Record<MemoryGraphNodeType, number>> = {};
-    for (const type of ALL_NODE_TYPES) totals[type] = 0;
-    for (const node of filteredNodes) totals[node.type] = (totals[node.type] ?? 0) + 1;
-    return totals as Record<MemoryGraphNodeType, number>;
-  }, [filteredNodes]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -238,6 +254,43 @@ export function MemoryGraphCanvas() {
     let width = 0;
     let height = 0;
     let dpr = 1;
+    let dirty = true; // redraw needed
+    let simEnergy = 0; // total kinetic energy — when near zero, freeze sim
+    let frameCount = 0;
+    let gridCanvas: HTMLCanvasElement | null = null;
+
+    // Build offscreen grid canvas once, reuse across frames
+    const getGridCanvas = () => {
+      if (gridCanvas && gridCanvas.width === width && gridCanvas.height === height) {
+        return gridCanvas;
+      }
+      gridCanvas?.remove();
+      gridCanvas = document.createElement("canvas");
+      gridCanvas.width = width;
+      gridCanvas.height = height;
+      const gc = gridCanvas.getContext("2d");
+      if (!gc) return null;
+      gc.fillStyle = "rgb(3 7 18)";
+      gc.fillRect(0, 0, width, height);
+      gc.save();
+      gc.globalAlpha = 0.12;
+      for (let x = 0; x < width; x += 36) {
+        gc.beginPath();
+        gc.moveTo(x, 0);
+        gc.lineTo(x, height);
+        gc.strokeStyle = "#7c3aed";
+        gc.stroke();
+      }
+      for (let y = 0; y < height; y += 36) {
+        gc.beginPath();
+        gc.moveTo(0, y);
+        gc.lineTo(width, y);
+        gc.strokeStyle = "#0ea5e9";
+        gc.stroke();
+      }
+      gc.restore();
+      return gridCanvas;
+    };
 
     const resize = () => {
       width = container.clientWidth;
@@ -248,7 +301,13 @@ export function MemoryGraphCanvas() {
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
+      gridCanvas = null; // invalidate cached grid
+      dirty = true;
       draw();
+      // Resume animation loop if paused (user resized)
+      if (!frame) {
+        frame = window.requestAnimationFrame(animate);
+      }
     };
 
     const getNodeById = (id: string | null) =>
@@ -286,6 +345,9 @@ export function MemoryGraphCanvas() {
     const stepSimulation = () => {
       const nodes = simRef.current.filter((node) => filteredNodeIds.has(node.id));
       const edgeCount = filteredEdges.length;
+
+      // Reset energy — recalculated per step
+      let totalEnergy = 0;
 
       for (let i = 0; i < nodes.length; i += 1) {
         const a = nodes[i];
@@ -342,38 +404,30 @@ export function MemoryGraphCanvas() {
           node.x += node.vx;
           node.y += node.vy;
         }
+
+        totalEnergy += node.vx * node.vx + node.vy * node.vy;
       }
 
       if (edgeCount === 0) {
         for (const node of nodes) {
           node.vx *= 0.9;
           node.vy *= 0.9;
+          totalEnergy = 0; // no edges means never stable — freeze immediately
         }
       }
+
+      simEnergy = totalEnergy;
     };
 
     const draw = () => {
-      context.clearRect(0, 0, width, height);
-      context.fillStyle = "rgb(3 7 18)";
-      context.fillRect(0, 0, width, height);
-
-      context.save();
-      context.globalAlpha = 0.12;
-      for (let x = 0; x < width; x += 36) {
-        context.beginPath();
-        context.moveTo(x, 0);
-        context.lineTo(x, height);
-        context.strokeStyle = "#7c3aed";
-        context.stroke();
+      const gc = getGridCanvas();
+      if (gc) {
+        context.drawImage(gc, 0, 0);
+      } else {
+        context.clearRect(0, 0, width, height);
+        context.fillStyle = "rgb(3 7 18)";
+        context.fillRect(0, 0, width, height);
       }
-      for (let y = 0; y < height; y += 36) {
-        context.beginPath();
-        context.moveTo(0, y);
-        context.lineTo(width, y);
-        context.strokeStyle = "#0ea5e9";
-        context.stroke();
-      }
-      context.restore();
 
       const hovered = hoveredIdRef.current;
       const selected = selectedIdRef.current;
@@ -461,9 +515,30 @@ export function MemoryGraphCanvas() {
     };
 
     const animate = () => {
-      stepSimulation();
-      draw();
-      frame = window.requestAnimationFrame(animate);
+      const isDragging = dragRef.current !== null;
+
+      // Always run simulation when dragging or early in the layout
+      if (isDragging || simEnergy > 0.01) {
+        frameCount += 1;
+        // Throttle simulation: run every 3 frames when energy is low
+        if (isDragging || frameCount % 2 === 0 || simEnergy > 1) {
+          stepSimulation();
+          dirty = true;
+        }
+      }
+
+      // Only draw when something changed
+      if (dirty) {
+        draw();
+        dirty = false;
+      }
+
+      // Keep looping only while energy is significant or dragging
+      if (isDragging || simEnergy > 0.01) {
+        frame = window.requestAnimationFrame(animate);
+      } else {
+        frame = 0; // pause — will be restarted by user interaction
+      }
     };
 
     const handleMove = (event: PointerEvent) => {
@@ -477,6 +552,10 @@ export function MemoryGraphCanvas() {
           offsetX: dragRef.current.offsetX + (x - dragRef.current.startX),
           offsetY: dragRef.current.offsetY + (y - dragRef.current.startY),
         });
+        dirty = true;
+        if (!frame) {
+          frame = window.requestAnimationFrame(animate);
+        }
         return;
       }
 
@@ -488,6 +567,10 @@ export function MemoryGraphCanvas() {
         node.y = world.y;
         node.vx = 0;
         node.vy = 0;
+        dirty = true;
+        if (!frame) {
+          frame = window.requestAnimationFrame(animate);
+        }
         return;
       }
 
@@ -500,6 +583,11 @@ export function MemoryGraphCanvas() {
       const x = event.clientX - rect.left;
       const y = event.clientY - rect.top;
       const node = pickNode(x, y);
+
+      dirty = true;
+      if (!frame) {
+        frame = window.requestAnimationFrame(animate);
+      }
 
       if (node) {
         dragRef.current = { kind: "node", id: node.id };
@@ -517,6 +605,10 @@ export function MemoryGraphCanvas() {
 
     const handleUp = () => {
       dragRef.current = null;
+      dirty = true;
+      if (!frame) {
+        frame = window.requestAnimationFrame(animate);
+      }
     };
 
     const handleWheel = (event: WheelEvent) => {
@@ -540,6 +632,10 @@ export function MemoryGraphCanvas() {
         offsetX: nextOffsetX,
         offsetY: nextOffsetY,
       });
+      dirty = true;
+      if (!frame) {
+        frame = window.requestAnimationFrame(animate);
+      }
     };
 
     const resizeObserver = new ResizeObserver(resize);

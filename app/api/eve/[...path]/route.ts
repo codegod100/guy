@@ -1,3 +1,10 @@
+// NOTE: This route handler is superseded by proxy.ts for all /api/eve/* requests.
+// The proxy rewrites /api/eve/* → /eve/* and injects the OIDC auth header at the
+// edge, eliminating the self-referencing fetch() that caused slow streaming.
+//
+// This file is kept as a fallback — if proxy.ts is ever removed, this handler
+// still works (just with the old buffered streaming behavior).
+
 const EVE_PREFIX = "/eve";
 
 function isRunningOnVercel(): boolean {
