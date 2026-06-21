@@ -23,7 +23,7 @@ const BETA_TERMS_HREF =
 type AgentStatus = ReturnType<typeof useEveAgent>["status"];
 
 export function AgentChat() {
-  const agent = useEveAgent({ host: "/api" });
+  const agent = useEveAgent();
   const isBusy = agent.status === "submitted" || agent.status === "streaming";
   const isEmpty = agent.data.messages.length === 0;
 

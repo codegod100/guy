@@ -69,6 +69,120 @@ async function initSchema(
       tags TEXT NOT NULL DEFAULT '[]',
       recorded_at TEXT NOT NULL
     )`,
+    `CREATE VIRTUAL TABLE IF NOT EXISTS nuggets_fts USING fts5(
+      content,
+      category,
+      significance,
+      source,
+      content='nuggets',
+      content_rowid='rowid'
+    )`,
+    `CREATE VIRTUAL TABLE IF NOT EXISTS sources_fts USING fts5(
+      url,
+      title,
+      author,
+      summary,
+      tags,
+      content='sources',
+      content_rowid='rowid'
+    )`,
+    `CREATE VIRTUAL TABLE IF NOT EXISTS ideas_fts USING fts5(
+      content,
+      source_id,
+      tags,
+      content='ideas',
+      content_rowid='rowid'
+    )`,
+    `CREATE VIRTUAL TABLE IF NOT EXISTS topics_fts USING fts5(
+      name,
+      description,
+      aliases,
+      content='topics',
+      content_rowid='rowid'
+    )`,
+    `CREATE VIRTUAL TABLE IF NOT EXISTS quotes_fts USING fts5(
+      text,
+      source_id,
+      context,
+      tags,
+      content='quotes',
+      content_rowid='rowid'
+    )`,
+    `CREATE TRIGGER IF NOT EXISTS nuggets_ai AFTER INSERT ON nuggets BEGIN
+      INSERT INTO nuggets_fts(rowid, content, category, significance, source)
+      VALUES (new.rowid, new.content, new.category, new.significance, new.source);
+    END`,
+    `CREATE TRIGGER IF NOT EXISTS nuggets_ad AFTER DELETE ON nuggets BEGIN
+      INSERT INTO nuggets_fts(nuggets_fts, rowid, content, category, significance, source)
+      VALUES ('delete', old.rowid, old.content, old.category, old.significance, old.source);
+    END`,
+    `CREATE TRIGGER IF NOT EXISTS nuggets_au AFTER UPDATE ON nuggets BEGIN
+      INSERT INTO nuggets_fts(nuggets_fts, rowid, content, category, significance, source)
+      VALUES ('delete', old.rowid, old.content, old.category, old.significance, old.source);
+      INSERT INTO nuggets_fts(rowid, content, category, significance, source)
+      VALUES (new.rowid, new.content, new.category, new.significance, new.source);
+    END`,
+    `CREATE TRIGGER IF NOT EXISTS sources_ai AFTER INSERT ON sources BEGIN
+      INSERT INTO sources_fts(rowid, url, title, author, summary, tags)
+      VALUES (new.rowid, new.url, new.title, new.author, new.summary, new.tags);
+    END`,
+    `CREATE TRIGGER IF NOT EXISTS sources_ad AFTER DELETE ON sources BEGIN
+      INSERT INTO sources_fts(sources_fts, rowid, url, title, author, summary, tags)
+      VALUES ('delete', old.rowid, old.url, old.title, old.author, old.summary, old.tags);
+    END`,
+    `CREATE TRIGGER IF NOT EXISTS sources_au AFTER UPDATE ON sources BEGIN
+      INSERT INTO sources_fts(sources_fts, rowid, url, title, author, summary, tags)
+      VALUES ('delete', old.rowid, old.url, old.title, old.author, old.summary, old.tags);
+      INSERT INTO sources_fts(rowid, url, title, author, summary, tags)
+      VALUES (new.rowid, new.url, new.title, new.author, new.summary, new.tags);
+    END`,
+    `CREATE TRIGGER IF NOT EXISTS ideas_ai AFTER INSERT ON ideas BEGIN
+      INSERT INTO ideas_fts(rowid, content, source_id, tags)
+      VALUES (new.rowid, new.content, new.source_id, new.tags);
+    END`,
+    `CREATE TRIGGER IF NOT EXISTS ideas_ad AFTER DELETE ON ideas BEGIN
+      INSERT INTO ideas_fts(ideas_fts, rowid, content, source_id, tags)
+      VALUES ('delete', old.rowid, old.content, old.source_id, old.tags);
+    END`,
+    `CREATE TRIGGER IF NOT EXISTS ideas_au AFTER UPDATE ON ideas BEGIN
+      INSERT INTO ideas_fts(ideas_fts, rowid, content, source_id, tags)
+      VALUES ('delete', old.rowid, old.content, old.source_id, old.tags);
+      INSERT INTO ideas_fts(rowid, content, source_id, tags)
+      VALUES (new.rowid, new.content, new.source_id, new.tags);
+    END`,
+    `CREATE TRIGGER IF NOT EXISTS topics_ai AFTER INSERT ON topics BEGIN
+      INSERT INTO topics_fts(rowid, name, description, aliases)
+      VALUES (new.rowid, new.name, new.description, new.aliases);
+    END`,
+    `CREATE TRIGGER IF NOT EXISTS topics_ad AFTER DELETE ON topics BEGIN
+      INSERT INTO topics_fts(topics_fts, rowid, name, description, aliases)
+      VALUES ('delete', old.rowid, old.name, old.description, old.aliases);
+    END`,
+    `CREATE TRIGGER IF NOT EXISTS topics_au AFTER UPDATE ON topics BEGIN
+      INSERT INTO topics_fts(topics_fts, rowid, name, description, aliases)
+      VALUES ('delete', old.rowid, old.name, old.description, old.aliases);
+      INSERT INTO topics_fts(rowid, name, description, aliases)
+      VALUES (new.rowid, new.name, new.description, new.aliases);
+    END`,
+    `CREATE TRIGGER IF NOT EXISTS quotes_ai AFTER INSERT ON quotes BEGIN
+      INSERT INTO quotes_fts(rowid, text, source_id, context, tags)
+      VALUES (new.rowid, new.text, new.source_id, new.context, new.tags);
+    END`,
+    `CREATE TRIGGER IF NOT EXISTS quotes_ad AFTER DELETE ON quotes BEGIN
+      INSERT INTO quotes_fts(quotes_fts, rowid, text, source_id, context, tags)
+      VALUES ('delete', old.rowid, old.text, old.source_id, old.context, old.tags);
+    END`,
+    `CREATE TRIGGER IF NOT EXISTS quotes_au AFTER UPDATE ON quotes BEGIN
+      INSERT INTO quotes_fts(quotes_fts, rowid, text, source_id, context, tags)
+      VALUES ('delete', old.rowid, old.text, old.source_id, old.context, old.tags);
+      INSERT INTO quotes_fts(rowid, text, source_id, context, tags)
+      VALUES (new.rowid, new.text, new.source_id, new.context, new.tags);
+    END`,
+    `INSERT INTO nuggets_fts(nuggets_fts) VALUES ('rebuild')`,
+    `INSERT INTO sources_fts(sources_fts) VALUES ('rebuild')`,
+    `INSERT INTO ideas_fts(ideas_fts) VALUES ('rebuild')`,
+    `INSERT INTO topics_fts(topics_fts) VALUES ('rebuild')`,
+    `INSERT INTO quotes_fts(quotes_fts) VALUES ('rebuild')`,
   ]);
 }
 
@@ -86,6 +200,20 @@ function parseJsonArray(val: unknown): string[] {
     }
   }
   return [];
+}
+
+function toFtsQuery(query: string): string {
+  const terms = query
+    .trim()
+    .split(/\s+/)
+    .map((term) => term.replaceAll('"', '""'))
+    .filter(Boolean);
+
+  if (terms.length === 0) {
+    throw new Error("'query' is required for search.");
+  }
+
+  return terms.map((term) => `"${term}"*`).join(" OR ");
 }
 
 // ---------------------------------------------------------------------------
@@ -284,27 +412,21 @@ export default defineTool({
       // -----------------------------------------------------------------------
       case "search": {
         if (!input.query) throw new Error("'query' is required for search.");
-        const q = `%${input.query}%`;
         const limit = input.limit ?? 20;
         const table = `${entity}s`;
-
-        // Build a LIKE query across all text columns for this entity
-        const textCols: Record<string, string[]> = {
-          nugget: ["content", "category", "source"],
-          source: ["url", "title", "author", "summary"],
-          idea: ["content", "source_id", "tags"],
-          topic: ["name", "description", "aliases"],
-          quote: ["text", "source_id", "context", "tags"],
-        };
-
-        const cols = textCols[entity] ?? ["id"];
-        const whereClause = cols.map((c) => `${c} LIKE ?`).join(" OR ");
-        const args: (string | number)[] = cols.flatMap(() => q);
-        args.push(limit);
+        const ftsTable = `${table}_fts`;
+        const ftsQuery = toFtsQuery(input.query);
 
         const result = await client.execute({
-          sql: `SELECT * FROM ${table} WHERE ${whereClause} ORDER BY rowid DESC LIMIT ?`,
-          args,
+          sql: `
+            SELECT base.*
+            FROM ${table} AS base
+            JOIN ${ftsTable} AS fts ON fts.rowid = base.rowid
+            WHERE ${ftsTable} MATCH ?
+            ORDER BY bm25(${ftsTable}), base.rowid DESC
+            LIMIT ?
+          `,
+          args: [ftsQuery, limit],
         });
 
         const rows = result.rows.map((r) =>
