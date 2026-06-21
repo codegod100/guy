@@ -1,5 +1,9 @@
 const EVE_PREFIX = "/eve";
 
+function isRunningOnVercel(): boolean {
+  return process.env.VERCEL === "1";
+}
+
 function buildUpstreamUrl(request: Request, pathParts: string[]): URL {
   const url = new URL(request.url);
   url.pathname = `${EVE_PREFIX}/${pathParts.join("/")}`;
@@ -8,17 +12,20 @@ function buildUpstreamUrl(request: Request, pathParts: string[]): URL {
 
 function buildUpstreamHeaders(request: Request): Headers {
   const oidcToken = request.headers.get("x-vercel-oidc-token");
-  if (!oidcToken) {
-    throw new Error(
-      "x-vercel-oidc-token is missing. This proxy must run on Vercel.",
-    );
-  }
-
   const headers = new Headers(request.headers);
-  headers.set("authorization", `Bearer ${oidcToken}`);
   headers.delete("host");
   headers.delete("content-length");
-  headers.delete("x-vercel-oidc-token");
+
+  if (oidcToken) {
+    headers.set("authorization", `Bearer ${oidcToken}`);
+    headers.delete("x-vercel-oidc-token");
+  } else if (isRunningOnVercel()) {
+    throw new Error(
+      "x-vercel-oidc-token is missing. Vercel OIDC must be enabled for this deployment.",
+    );
+  }
+  // Local dev: no OIDC token, forward without auth (localDev() allows it).
+
   return headers;
 }
 

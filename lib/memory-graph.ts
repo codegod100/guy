@@ -35,10 +35,6 @@ function parseJsonArray(value: unknown): string[] {
   }
 }
 
-function truncate(text: string, max = 120): string {
-  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
-}
-
 export type MemoryGraphNodeType =
   | "source"
   | "idea"
@@ -170,7 +166,7 @@ export async function getMemoryGraphData(): Promise<MemoryGraphData> {
       id: source.id,
       type: "source",
       label: source.title || source.url || source.id,
-      description: truncate(source.summary || source.url || "Source"),
+      description: source.summary || source.url || "Source",
       tags,
       size: 26 + Math.min(tags.length * 2, 10),
       metadata: {
@@ -188,8 +184,8 @@ export async function getMemoryGraphData(): Promise<MemoryGraphData> {
     nodes.push({
       id: idea.id,
       type: "idea",
-      label: truncate(idea.content, 48),
-      description: truncate(idea.content, 160),
+      label: idea.content,
+      description: idea.content,
       tags,
       size: 20 + idea.importance * 3,
       metadata: {
@@ -218,7 +214,7 @@ export async function getMemoryGraphData(): Promise<MemoryGraphData> {
       id: topic.id,
       type: "topic",
       label: topic.name,
-      description: truncate(topic.description || topic.name),
+      description: topic.description || topic.name,
       tags: aliases,
       size: 24 + Math.min(aliases.length * 2, 10),
       metadata: {
@@ -233,8 +229,8 @@ export async function getMemoryGraphData(): Promise<MemoryGraphData> {
     nodes.push({
       id: quote.id,
       type: "quote",
-      label: truncate(quote.text, 42),
-      description: truncate(quote.context || quote.text, 160),
+      label: quote.text,
+      description: quote.context || quote.text,
       tags,
       size: 18 + Math.min(tags.length * 2, 8),
       metadata: {
@@ -260,8 +256,8 @@ export async function getMemoryGraphData(): Promise<MemoryGraphData> {
     nodes.push({
       id: nugget.id,
       type: "nugget",
-      label: truncate(nugget.content, 44),
-      description: truncate(nugget.content, 160),
+      label: nugget.content,
+      description: nugget.content,
       tags: [nugget.category, nugget.significance].filter(Boolean),
       size: 18,
       metadata: {

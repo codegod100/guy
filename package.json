@@ -9,6 +9,7 @@
   "scripts": {
     "build": "next build",
     "dev": "next dev",
+    "dev:webpack": "next dev --webpack",
     "start": "next start",
     "typecheck": "tsgo --noEmit -p tsconfig.json",
     "prepare": "node scripts/inline-cowsay-cows.mjs"
@@ -51,7 +52,8 @@
     "@types/node": "24.x",
     "@types/react": "19.2.15",
     "@types/react-dom": "19.2.3",
-    "@typescript/native-preview": "7.0.0-dev.20260523.1"
+    "@typescript/native-preview": "7.0.0-dev.20260523.1",
+    "just-bash": "^3.0.1"
   },
   "overrides": {
     "ai": "7.0.0-beta.178"

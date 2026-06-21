@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { MemoryGraphCanvas } from "@/app/graph/_components/memory-graph-canvas";
+import { MemoryGraphPageClient } from "@/app/graph/_components/memory-graph-page-client";
 
 export const metadata: Metadata = {
   title: "Memory Graph · guy",
@@ -7,5 +7,5 @@ export const metadata: Metadata = {
 };
 
 export default function GraphPage() {
-  return <MemoryGraphCanvas />;
+  return <MemoryGraphPageClient />;
 }

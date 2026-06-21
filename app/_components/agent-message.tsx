@@ -18,6 +18,18 @@ export type AgentInputResponse = {
   readonly text?: string;
 };
 
+type InputOption = {
+  readonly id: string;
+  readonly label: string;
+  readonly style?: "default" | "danger" | "primary";
+};
+
+type MessageInputRequest = {
+  readonly options?: readonly InputOption[];
+  readonly prompt: string;
+  readonly requestId: string;
+};
+
 export function AgentMessage({
   canRespond,
   isStreaming,
@@ -78,7 +90,9 @@ function AgentMessagePart({
       return (
         <Reasoning defaultOpen isStreaming={part.state === "streaming"}>
           <ReasoningTrigger />
-          <ReasoningContent>{part.text}</ReasoningContent>
+          <ReasoningContent isStreaming={part.state === "streaming"}>
+            {part.text}
+          </ReasoningContent>
         </Reasoning>
       );
     case "dynamic-tool":
@@ -115,7 +129,7 @@ function InputRequestActions({
   readonly onInputResponses: (responses: readonly AgentInputResponse[]) => void | Promise<void>;
   readonly part: EveDynamicToolPart;
 }) {
-  const inputRequest = part.toolMetadata?.eve?.inputRequest;
+  const inputRequest = getInputRequest(part);
   if (!inputRequest) {
     return null;
   }
@@ -156,6 +170,84 @@ function InputRequestActions({
         </div>
       )}
     </div>
+  );
+}
+
+function getInputRequest(part: EveDynamicToolPart): MessageInputRequest | null {
+  const metadataRequest = part.toolMetadata?.eve?.inputRequest;
+  if (isMessageInputRequest(metadataRequest)) {
+    return metadataRequest;
+  }
+
+  if (part.toolName !== "ask_question" || part.approval?.id === undefined) {
+    return null;
+  }
+
+  const input = part.input;
+  if (!isAskQuestionInput(input)) {
+    return null;
+  }
+
+  return {
+    options: input.options,
+    prompt: input.prompt,
+    requestId: part.approval.id,
+  };
+}
+
+function isMessageInputRequest(value: unknown): value is MessageInputRequest {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const request = value as {
+    options?: unknown;
+    prompt?: unknown;
+    requestId?: unknown;
+  };
+
+  return (
+    typeof request.prompt === "string" &&
+    typeof request.requestId === "string" &&
+    (request.options === undefined || isInputOptions(request.options))
+  );
+}
+
+function isAskQuestionInput(value: unknown): value is { options?: readonly InputOption[]; prompt: string } {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const input = value as {
+    options?: unknown;
+    prompt?: unknown;
+  };
+
+  return typeof input.prompt === "string" && (input.options === undefined || isInputOptions(input.options));
+}
+
+function isInputOptions(value: unknown): value is readonly InputOption[] {
+  return Array.isArray(value) && value.every(isInputOption);
+}
+
+function isInputOption(value: unknown): value is InputOption {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const option = value as {
+    id?: unknown;
+    label?: unknown;
+    style?: unknown;
+  };
+
+  return (
+    typeof option.id === "string" &&
+    typeof option.label === "string" &&
+    (option.style === undefined ||
+      option.style === "default" ||
+      option.style === "danger" ||
+      option.style === "primary")
   );
 }
 

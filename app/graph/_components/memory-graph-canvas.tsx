@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import type {
   MemoryGraphData,
@@ -41,13 +43,37 @@ interface Viewport {
   readonly offsetY: number;
 }
 
+const ALL_NODE_TYPES = Object.keys(TYPE_LABELS) as MemoryGraphNodeType[];
+
+function matchesQuery(node: MemoryGraphNode, query: string) {
+  if (!query) return true;
+
+  const metadataValues = Object.values(node.metadata)
+    .flatMap((value) => (Array.isArray(value) ? value : [value]))
+    .filter((value): value is string | number => value !== null);
+
+  const haystack = [
+    node.label,
+    node.description,
+    ...node.tags,
+    ...metadataValues.map(String),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  return haystack.includes(query);
+}
+
 export function MemoryGraphCanvas() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [graph, setGraph] = useState<MemoryGraphData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [activeTypes, setActiveTypes] = useState<MemoryGraphNodeType[]>(ALL_NODE_TYPES);
   const [viewport, setViewport] = useState<Viewport>({
     scale: 1,
     offsetX: 0,
@@ -81,10 +107,23 @@ export function MemoryGraphCanvas() {
     selectedIdRef.current = selectedId;
   }, [selectedId]);
 
-  useEffect(() => {
-    let cancelled = false;
+  const focusNode = (id: string | null, scale = viewportRef.current.scale) => {
+    if (!id) return;
+    const node = simRef.current.find((item) => item.id === id);
+    if (!node) return;
 
-    void fetch("/api/graph", { cache: "no-store" })
+    setViewport({
+      scale,
+      offsetX: -node.x * scale,
+      offsetY: -node.y * scale,
+    });
+  };
+
+  const loadGraph = () => {
+    setIsLoading(true);
+    setError(null);
+
+    return fetch("/api/graph", { cache: "no-store" })
       .then(async (response) => {
         const data = (await response.json()) as GraphResponse;
         if (!response.ok || "ok" in data) {
@@ -95,15 +134,24 @@ export function MemoryGraphCanvas() {
         return data;
       })
       .then((data) => {
-        if (cancelled) return;
         setGraph(data);
+        setSelectedId((current) => current ?? data.nodes[0]?.id ?? null);
         setError(null);
-        setSelectedId(data.nodes[0]?.id ?? null);
       })
       .catch((err: unknown) => {
-        if (cancelled) return;
         setError(err instanceof Error ? err.message : "Failed to load graph.");
+      })
+      .finally(() => {
+        setIsLoading(false);
       });
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void loadGraph().catch(() => {
+      if (cancelled) return;
+    });
 
     return () => {
       cancelled = true;
@@ -131,12 +179,52 @@ export function MemoryGraphCanvas() {
     [graph, selectedId],
   );
 
-  const relatedEdges = useMemo(() => {
-    if (!graph || !selectedId) return [];
+  const normalizedSearch = search.trim().toLowerCase();
+
+  const filteredNodes = useMemo(() => {
+    if (!graph) return [];
+    return graph.nodes.filter(
+      (node) =>
+        activeTypes.includes(node.type) && matchesQuery(node, normalizedSearch),
+    );
+  }, [activeTypes, graph, normalizedSearch]);
+
+  const filteredNodeIds = useMemo(
+    () => new Set(filteredNodes.map((node) => node.id)),
+    [filteredNodes],
+  );
+
+  const filteredEdges = useMemo(() => {
+    if (!graph) return [];
     return graph.edges.filter(
+      (edge) =>
+        filteredNodeIds.has(edge.source) && filteredNodeIds.has(edge.target),
+    );
+  }, [filteredNodeIds, graph]);
+
+  useEffect(() => {
+    if (!filteredNodes.length) {
+      setSelectedId(null);
+      return;
+    }
+
+    if (selectedId && filteredNodeIds.has(selectedId)) return;
+    setSelectedId(filteredNodes[0]?.id ?? null);
+  }, [filteredNodeIds, filteredNodes, selectedId]);
+
+  const relatedEdges = useMemo(() => {
+    if (!selectedId) return [];
+    return filteredEdges.filter(
       (edge) => edge.source === selectedId || edge.target === selectedId,
     );
-  }, [graph, selectedId]);
+  }, [filteredEdges, selectedId]);
+
+  const typeTotals = useMemo(() => {
+    const totals: Partial<Record<MemoryGraphNodeType, number>> = {};
+    for (const type of ALL_NODE_TYPES) totals[type] = 0;
+    for (const node of filteredNodes) totals[node.type] = (totals[node.type] ?? 0) + 1;
+    return totals as Record<MemoryGraphNodeType, number>;
+  }, [filteredNodes]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -196,8 +284,8 @@ export function MemoryGraphCanvas() {
     };
 
     const stepSimulation = () => {
-      const nodes = simRef.current;
-      const edgeCount = graph.edges.length;
+      const nodes = simRef.current.filter((node) => filteredNodeIds.has(node.id));
+      const edgeCount = filteredEdges.length;
 
       for (let i = 0; i < nodes.length; i += 1) {
         const a = nodes[i];
@@ -216,7 +304,7 @@ export function MemoryGraphCanvas() {
         }
       }
 
-      for (const edge of graph.edges) {
+      for (const edge of filteredEdges) {
         const source = nodes.find((node) => node.id === edge.source);
         const target = nodes.find((node) => node.id === edge.target);
         if (!source || !target) continue;
@@ -291,14 +379,14 @@ export function MemoryGraphCanvas() {
       const selected = selectedIdRef.current;
       const highlighted = new Set<string>();
       if (selected) highlighted.add(selected);
-      for (const edge of graph.edges) {
+      for (const edge of filteredEdges) {
         if (edge.source === selected || edge.target === selected) {
           highlighted.add(edge.source);
           highlighted.add(edge.target);
         }
       }
 
-      for (const edge of graph.edges) {
+      for (const edge of filteredEdges) {
         const source = getNodeById(edge.source);
         const target = getNodeById(edge.target);
         if (!source || !target) continue;
@@ -321,6 +409,7 @@ export function MemoryGraphCanvas() {
       }
 
       for (const node of simRef.current) {
+        if (!filteredNodeIds.has(node.id)) continue;
         const point = worldToScreen(node.x, node.y);
         const color = TYPE_COLORS[node.type];
         const active = node.id === selected || node.id === hovered;
@@ -471,11 +560,14 @@ export function MemoryGraphCanvas() {
       canvas.removeEventListener("wheel", handleWheel);
       window.cancelAnimationFrame(frame);
     };
-  }, [graph]);
+  }, [filteredEdges, filteredNodeIds, graph]);
 
   const legendItems = graph
     ? (Object.keys(graph.totals) as MemoryGraphNodeType[])
     : [];
+
+  const hasFilters =
+    normalizedSearch.length > 0 || activeTypes.length !== ALL_NODE_TYPES.length;
 
   return (
     <main className="flex min-h-dvh flex-col bg-slate-950 text-slate-50">
@@ -502,6 +594,41 @@ export function MemoryGraphCanvas() {
             >
               Reset view
             </Button>
+            <Button
+              className="bg-slate-800 text-slate-100 hover:bg-slate-700"
+              disabled={!selectedId}
+              onClick={() => focusNode(selectedId, 1.2)}
+              type="button"
+              variant="secondary"
+            >
+              Focus selection
+            </Button>
+            <Button
+              className="bg-slate-800 text-slate-100 hover:bg-slate-700"
+              onClick={() =>
+                setViewport((current) => ({
+                  ...current,
+                  scale: Math.min(current.scale * 1.2, 2.4),
+                }))
+              }
+              type="button"
+              variant="secondary"
+            >
+              Zoom in
+            </Button>
+            <Button
+              className="bg-slate-800 text-slate-100 hover:bg-slate-700"
+              onClick={() =>
+                setViewport((current) => ({
+                  ...current,
+                  scale: Math.max(current.scale / 1.2, 0.35),
+                }))
+              }
+              type="button"
+              variant="secondary"
+            >
+              Zoom out
+            </Button>
             <span className="rounded-full border border-slate-800 px-3 py-1 text-slate-400">
               drag to pan · wheel to zoom · drag nodes to reshape
             </span>
@@ -509,7 +636,7 @@ export function MemoryGraphCanvas() {
         </div>
       </header>
 
-      <div className="grid flex-1 gap-px bg-slate-900 lg:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="grid flex-1 gap-px bg-slate-900 lg:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
         <section className="relative min-h-[60vh] bg-slate-950">
           {error ? (
             <div className="flex h-full items-center justify-center p-8">
@@ -518,9 +645,18 @@ export function MemoryGraphCanvas() {
                   Couldn&apos;t load the memory graph.
                 </p>
                 <p className="mt-2 text-rose-100/80">{error}</p>
+                <Button
+                  className="mt-4 bg-rose-100 text-rose-950 hover:bg-white"
+                  onClick={() => {
+                    void loadGraph();
+                  }}
+                  type="button"
+                >
+                  Retry
+                </Button>
               </div>
             </div>
-          ) : !graph ? (
+          ) : isLoading && !graph ? (
             <div className="flex h-full items-center justify-center text-slate-400 text-sm">
               Loading graph…
             </div>
@@ -528,13 +664,71 @@ export function MemoryGraphCanvas() {
             <div className="absolute inset-0" ref={containerRef}>
               <canvas className="h-full w-full" ref={canvasRef} />
               <div className="pointer-events-none absolute bottom-4 left-4 rounded-xl border border-slate-800/80 bg-slate-950/80 px-3 py-2 text-slate-300 text-xs backdrop-blur">
-                {graph.nodes.length} nodes · {graph.edges.length} edges
+                Showing {filteredNodes.length} of {graph.nodes.length} nodes · {filteredEdges.length} edges
+              </div>
+              <div className="pointer-events-none absolute right-4 top-4 rounded-xl border border-slate-800/80 bg-slate-950/80 px-3 py-2 text-slate-300 text-xs backdrop-blur">
+                Zoom {Math.round(viewport.scale * 100)}%
               </div>
             </div>
           )}
         </section>
 
         <aside className="border-slate-800 bg-slate-925 flex flex-col border-l bg-slate-900/80">
+          <div className="border-slate-800 border-b p-5">
+            <h2 className="font-medium text-sm text-slate-200">Explore</h2>
+            <div className="mt-4 space-y-3">
+              <Input
+                className="border-slate-800 bg-slate-950/70 text-slate-100 placeholder:text-slate-500"
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search labels, tags, metadata..."
+                value={search}
+              />
+              <div className="flex flex-wrap gap-2">
+                {ALL_NODE_TYPES.map((type) => {
+                  const active = activeTypes.includes(type);
+                  return (
+                    <button
+                      className={cn(
+                        "rounded-full border px-3 py-1 text-xs transition",
+                        active
+                          ? "border-transparent text-slate-950"
+                          : "border-slate-700 bg-slate-950/60 text-slate-300 hover:border-slate-500",
+                      )}
+                      key={type}
+                      onClick={() => {
+                        setActiveTypes((current) => {
+                          if (current.includes(type)) {
+                            return current.filter((item) => item !== type);
+                          }
+                          return [...current, type];
+                        });
+                      }}
+                      style={active ? { backgroundColor: TYPE_COLORS[type] } : undefined}
+                      type="button"
+                    >
+                      {TYPE_LABELS[type]} ({typeTotals[type]})
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="flex items-center justify-between text-slate-400 text-xs">
+                <span>{filteredNodes.length} matching nodes</span>
+                {hasFilters ? (
+                  <button
+                    className="text-slate-300 underline decoration-slate-700 underline-offset-4"
+                    onClick={() => {
+                      setSearch("");
+                      setActiveTypes(ALL_NODE_TYPES);
+                    }}
+                    type="button"
+                  >
+                    Clear filters
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          </div>
+
           <div className="border-slate-800 border-b p-5">
             <h2 className="font-medium text-sm text-slate-200">Legend</h2>
             <div className="mt-4 grid grid-cols-2 gap-2">
@@ -553,7 +747,7 @@ export function MemoryGraphCanvas() {
                     </span>
                   </div>
                   <p className="mt-1 font-medium text-base text-white">
-                    {graph?.totals[type] ?? 0}
+                    {typeTotals[type]}
                   </p>
                 </div>
               ))}
@@ -561,24 +755,77 @@ export function MemoryGraphCanvas() {
           </div>
 
           <div className="flex-1 overflow-y-auto p-5">
-            {selectedNode ? (
+            {filteredNodes.length > 0 ? (
               <>
-                <div className="flex items-center gap-3">
+                <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="font-medium text-sm text-slate-200">
+                      Matching nodes
+                    </h3>
+                    <Badge className="bg-slate-800 text-slate-200" variant="secondary">
+                      {filteredNodes.length}
+                    </Badge>
+                  </div>
+                  <div className="mt-3 max-h-48 space-y-2 overflow-y-auto pr-1">
+                    {filteredNodes.slice(0, 12).map((node) => (
+                      <button
+                        className={cn(
+                          "flex w-full items-start gap-3 rounded-xl border px-3 py-2 text-left transition",
+                          selectedId === node.id
+                            ? "border-slate-500 bg-slate-800/80"
+                            : "border-slate-800 bg-slate-950/70 hover:border-slate-700 hover:bg-slate-900/80",
+                        )}
+                        key={node.id}
+                        onClick={() => {
+                          setSelectedId(node.id);
+                          focusNode(node.id, 1.2);
+                        }}
+                        type="button"
+                      >
+                        <span
+                          className="mt-1 size-2.5 shrink-0 rounded-full"
+                          style={{ backgroundColor: TYPE_COLORS[node.type] }}
+                        />
+                        <span className="min-w-0">
+                          <span className="block break-words text-sm text-white whitespace-pre-wrap">
+                            {node.label}
+                          </span>
+                          <span className="block text-slate-500 text-xs uppercase tracking-wide">
+                            {node.type}
+                          </span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {selectedNode ? (
+                  <>
+                <div className="flex items-start gap-3">
                   <span
                     className="size-3 rounded-full"
                     style={{ backgroundColor: TYPE_COLORS[selectedNode.type] }}
                   />
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <p className="text-slate-400 text-xs uppercase tracking-[0.24em]">
                       {selectedNode.type}
                     </p>
-                    <h3 className="mt-1 font-semibold text-xl text-white">
+                    <h3 className="mt-1 break-words font-semibold text-xl text-white whitespace-pre-wrap">
                       {selectedNode.label}
                     </h3>
                   </div>
                 </div>
 
-                <p className="mt-4 text-slate-300 text-sm leading-6">
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <Badge className="bg-slate-800 text-slate-200" variant="secondary">
+                    {selectedNode.type}
+                  </Badge>
+                  <Badge className="bg-slate-800 text-slate-200" variant="secondary">
+                    {relatedEdges.length} connected edges
+                  </Badge>
+                </div>
+
+                <p className="mt-4 break-words text-slate-300 text-sm leading-6 whitespace-pre-wrap">
                   {selectedNode.description}
                 </p>
 
@@ -609,7 +856,7 @@ export function MemoryGraphCanvas() {
                           <dt className="text-slate-500 text-xs uppercase tracking-wide">
                             {key}
                           </dt>
-                          <dd className="mt-1 wrap-break-word text-slate-200 text-sm">
+                          <dd className="mt-1 break-words text-slate-200 text-sm whitespace-pre-wrap">
                             {Array.isArray(value)
                               ? value.join(", ") || "—"
                               : value === null || value === ""
@@ -651,10 +898,12 @@ export function MemoryGraphCanvas() {
                     )}
                   </div>
                 </div>
+                  </>
+                ) : null}
               </>
             ) : (
               <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-5 text-slate-400 text-sm">
-                Select a node to inspect it.
+                No nodes match the current filters. Try a broader search or clear filters.
               </div>
             )}
           </div>

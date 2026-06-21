@@ -84,6 +84,25 @@ const WEATHER_CODE_DESCRIPTIONS: Record<number, string> = {
   99: "Thunderstorm with heavy hail",
 };
 
+const FAHRENHEIT_REGIONS = new Set([
+  "AS",
+  "BS",
+  "BZ",
+  "KY",
+  "FM",
+  "GU",
+  "LR",
+  "MH",
+  "MP",
+  "PR",
+  "PW",
+  "UM",
+  "US",
+  "VI",
+]);
+
+type TemperatureUnit = "celsius" | "fahrenheit";
+
 function weatherCodeToText(code: number | undefined): string | undefined {
   if (code === undefined) return undefined;
   return WEATHER_CODE_DESCRIPTIONS[code] ?? `Weather code ${code}`;
@@ -113,6 +132,39 @@ async function fetchJson(url: URL): Promise<unknown> {
   return response.json();
 }
 
+function getStringAttribute(
+  attributes: Record<string, unknown> | null | undefined,
+  key: string,
+): string | undefined {
+  const value = attributes?.[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function getRegionFromLocale(locale: string | undefined): string | undefined {
+  if (!locale) return undefined;
+
+  try {
+    return new Intl.Locale(locale).maximize().region?.toUpperCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveTemperatureUnit(
+  requestedUnit: TemperatureUnit | undefined,
+  authAttributes: Record<string, unknown> | null | undefined,
+): TemperatureUnit {
+  if (requestedUnit) return requestedUnit;
+
+  const region =
+    getStringAttribute(authAttributes, "region") ??
+    getRegionFromLocale(getStringAttribute(authAttributes, "locale"));
+
+  return region && FAHRENHEIT_REGIONS.has(region)
+    ? "fahrenheit"
+    : "celsius";
+}
+
 export default defineTool({
   description:
     "Get current weather conditions and a short forecast for a city using the Open-Meteo geocoding and forecast APIs.",
@@ -134,8 +186,9 @@ export default defineTool({
     temperatureUnit: z
       .enum(["celsius", "fahrenheit"])
       .optional()
-      .default("celsius")
-      .describe("Temperature unit for the returned weather data."),
+      .describe(
+        "Optional temperature unit override. When omitted, the tool uses the caller's regional default when available.",
+      ),
     windSpeedUnit: z
       .enum(["kmh", "ms", "mph", "kn"])
       .optional()
@@ -146,9 +199,14 @@ export default defineTool({
     city,
     countryCode,
     days = 3,
-    temperatureUnit = "celsius",
+    temperatureUnit,
     windSpeedUnit = "kmh",
-  }) {
+  }, ctx) {
+    const resolvedTemperatureUnit = resolveTemperatureUnit(
+      temperatureUnit,
+      ctx.session.auth.current?.attributes,
+    );
+
     const geocodeUrl = new URL(
       "https://geocoding-api.open-meteo.com/v1/search",
     );
@@ -174,7 +232,7 @@ export default defineTool({
     forecastUrl.searchParams.set("longitude", String(location.longitude));
     forecastUrl.searchParams.set("timezone", "auto");
     forecastUrl.searchParams.set("forecast_days", String(days));
-    forecastUrl.searchParams.set("temperature_unit", temperatureUnit);
+    forecastUrl.searchParams.set("temperature_unit", resolvedTemperatureUnit);
     forecastUrl.searchParams.set("wind_speed_unit", windSpeedUnit);
     forecastUrl.searchParams.set(
       "current",
@@ -272,9 +330,9 @@ export default defineTool({
                     value: current.temperature_2m,
                     unit:
                       currentUnits.temperature_2m ??
-                      (temperatureUnit === "fahrenheit" ? "°F" : "°C"),
-                  }
-                : undefined,
+                      (resolvedTemperatureUnit === "fahrenheit" ? "°F" : "°C"),
+                   }
+                 : undefined,
             apparentTemperature:
               current.apparent_temperature !== undefined
                 ? {
