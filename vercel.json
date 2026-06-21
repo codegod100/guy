@@ -7,7 +7,7 @@
       "routePrefix": "/"
     },
     "eve": {
-      "buildCommand": "node scripts/inline-letta-cli.mjs && eve build",
+      "buildCommand": "node scripts/inline-cowsay-cows.mjs && eve build",
       "entrypoint": ".",
       "framework": "eve",
       "routePrefix": "/_eve_internal/eve"
