@@ -11,7 +11,7 @@ import { memo } from "react";
  * until a message with rendered content actually appears.
  */
 const StreamdownInner = dynamic(
-  () => import("./streamdown-inner"),
+  () => import("./streamdown-inner").then((mod) => mod.StreamdownInner),
   {
     ssr: false,
     loading: () => null,

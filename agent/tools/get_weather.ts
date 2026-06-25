@@ -160,9 +160,7 @@ function resolveTemperatureUnit(
     getStringAttribute(authAttributes, "region") ??
     getRegionFromLocale(getStringAttribute(authAttributes, "locale"));
 
-  return region && FAHRENHEIT_REGIONS.has(region)
-    ? "fahrenheit"
-    : "celsius";
+  return region && FAHRENHEIT_REGIONS.has(region) ? "fahrenheit" : "celsius";
 }
 
 export default defineTool({
@@ -179,10 +177,10 @@ export default defineTool({
       .number()
       .int()
       .min(1)
-      .max(7)
+      .max(16)
       .optional()
       .default(3)
-      .describe("Number of forecast days to return, from 1 to 7."),
+      .describe("Number of forecast days to return, from 1 to 16."),
     temperatureUnit: z
       .enum(["celsius", "fahrenheit"])
       .optional()
@@ -195,13 +193,10 @@ export default defineTool({
       .default("kmh")
       .describe("Wind speed unit for the returned weather data."),
   }),
-  async execute({
-    city,
-    countryCode,
-    days = 3,
-    temperatureUnit,
-    windSpeedUnit = "kmh",
-  }, ctx) {
+  async execute(
+    { city, countryCode, days = 3, temperatureUnit, windSpeedUnit = "kmh" },
+    ctx,
+  ) {
     const resolvedTemperatureUnit = resolveTemperatureUnit(
       temperatureUnit,
       ctx.session.auth.current?.attributes,
@@ -331,8 +326,8 @@ export default defineTool({
                     unit:
                       currentUnits.temperature_2m ??
                       (resolvedTemperatureUnit === "fahrenheit" ? "°F" : "°C"),
-                   }
-                 : undefined,
+                  }
+                : undefined,
             apparentTemperature:
               current.apparent_temperature !== undefined
                 ? {
