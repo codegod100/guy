@@ -103,7 +103,6 @@ export class OutboundQueue {
     limit: number,
     now: Date = new Date(),
   ): Promise<OutboundMessage[]> {
-    const start = Date.now();
     const result = await this.client.execute({
       sql: `SELECT id, target, body, send_after, attempts, context, created_at
             FROM pending_messages
@@ -113,7 +112,7 @@ export class OutboundQueue {
             LIMIT ?`,
       args: [now.toISOString(), limit],
     });
-    const messages = result.rows.map((row) => ({
+    return result.rows.map((row) => ({
       id: row.id as string,
       target: row.target as string,
       body: row.body as string,
@@ -124,12 +123,6 @@ export class OutboundQueue {
         : null,
       createdAt: row.created_at as string,
     }));
-    this.log.debug("db.claimReady", {
-      claimed: messages.length,
-      limit,
-      durationMs: Date.now() - start,
-    });
-    return messages;
   }
 
   async markSent(id: string): Promise<void> {

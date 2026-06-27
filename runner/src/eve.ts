@@ -8,6 +8,31 @@ import { Client, ClientError } from "eve/client";
 import type { HandleMessageStreamEvent } from "eve/client";
 import type { RunnerConfig } from "./config.ts";
 
+/**
+ * Mirrors eve's `JsonObject` shape (the JSON-serializable subset). eve's
+ * type isn't re-exported from a public subpath, so we redeclare the minimal
+ * shape the clientContext accepts. Values must be JSON-serializable — the
+ * cast to `eve`'s internal type is safe because everything we pass
+ * (`raft_*` strings, the recent-messages array of plain objects) round-
+ * trips through JSON.
+ */
+type EveJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly EveJsonValue[]
+  | { readonly [k: string]: EveJsonValue };
+type EveClientContext = { readonly [k: string]: EveJsonValue };
+
+// Resolved shape of eve's clientContext parameter — used to bridge our
+// structurally-compatible EveClientContext to eve's internal JsonObject.
+type EveClientContextParam = Parameters<
+  ReturnType<InstanceType<typeof Client>["session"]>["send"]
+>[0] extends { clientContext?: infer C }
+  ? C
+  : never;
+
 export type EveTextProgress = {
   /** Aggregated assistant text from `message.appended` deltas. */
   text: string;
@@ -17,10 +42,13 @@ export type EveTextProgress = {
   status: "completed" | "failed" | "waiting";
   /** sessionId from the response — used for diagnostics. */
   sessionId: string;
+  /** Resolved model id from the agent's compile-time config (e.g. `minimax/MiniMax-M3`). */
+  modelId?: string;
 };
 
 export class Eve {
   private readonly client: Client;
+  private modelIdPromise: Promise<string | undefined> | undefined;
 
   constructor(cfg: RunnerConfig) {
     this.client = new Client({
@@ -49,7 +77,7 @@ export class Eve {
    */
   async send(
     message: string,
-    clientContext: Record<string, string>,
+    clientContext: EveClientContext,
   ): Promise<EveTextProgress> {
     let text = "";
     let data: unknown = undefined;
@@ -57,9 +85,8 @@ export class Eve {
     let sessionId = "";
 
     try {
-      const response = await this.client
-        .session()
-        .send({ message, clientContext });
+      const ctx = clientContext as unknown as EveClientContextParam;
+      const response = await this.client.session().send({ message, clientContext: ctx });
       sessionId = response.sessionId;
       for await (const event of response) {
         const piece = consumeEvent(event);
@@ -67,14 +94,14 @@ export class Eve {
         if (piece.finalData !== undefined) data = piece.finalData;
         if (piece.status) status = piece.status;
       }
-      // If the stream ended without an explicit status event, treat it as
-      // completed — the server closed the stream cleanly.
       if (status === "waiting" && text.length > 0) status = "completed";
+      const modelId = await this.resolveModelId();
       return {
         text,
         data,
         status,
         sessionId,
+        modelId,
       };
     } catch (err) {
       if (err instanceof ClientError) {
@@ -89,6 +116,29 @@ export class Eve {
    */
   async health(): Promise<void> {
     await this.client.health();
+  }
+
+  /**
+   * Fetch the agent's compile-time model id once and cache it for subsequent
+   * turns. The agent's `agent.ts` is what sets the model, so the value is
+   * stable for the life of the runner process — no need to re-fetch per turn.
+   *
+   * Returns undefined if the agent-info endpoint can't be reached or the
+   * payload doesn't carry a model id (callers should treat that as a soft
+   * signal, not a hard failure — turns can still complete without it).
+   */
+  private resolveModelId(): Promise<string | undefined> {
+    if (this.modelIdPromise === undefined) {
+      this.modelIdPromise = (async () => {
+        try {
+          const info = await this.client.info();
+          return info.agent.model.id;
+        } catch {
+          return undefined;
+        }
+      })();
+    }
+    return this.modelIdPromise;
   }
 }
 

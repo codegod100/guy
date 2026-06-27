@@ -17,7 +17,7 @@
 
 import type { RunnerConfig } from "./config.ts";
 import type { Eve } from "./eve.ts";
-import type { Raft, RaftMessage, RaftTask } from "./raft.ts";
+import type { Raft, RaftMessage, RaftTask, RaftHistoryMessage } from "./raft.ts";
 import { RaftCallError } from "./raft.ts";
 import type { MessageStore, SeenStatus } from "./store.ts";
 import type { OutboundQueue } from "./queue.ts";
@@ -305,11 +305,38 @@ export class Bridge {
     await this.raft.messageReact(msg.id, "👀");
     this.log.info("ack reacted", { msgId: msg.id, emoji: "👀" });
 
-    // 2. Drive the eve turn. clientContext carries ephemeral attribution
-    // metadata per the eve client docs (not persisted to durable history).
-    // `raft_target` is the thread target the reply should land in — the
-    // `enqueue_raft_message` tool reads it so a tool call doesn't need to
-    // recompute the DM/thread flip logic.
+    // 2. Fetch recent channel history so the eve agent has conversational
+    //    context (what was said before this message). The fetch is best-
+    //    effort — if raft rejects or returns nothing, we fall through to an
+    //    empty context rather than failing the turn.
+    let raftRecentMessages: RaftHistoryMessage[] = [];
+    if (this.cfg.channelHistoryLimit > 0) {
+      const fetchStart = Date.now();
+      try {
+        raftRecentMessages = await this.raft.messageRead(channel, {
+          limit: this.cfg.channelHistoryLimit,
+        });
+        this.log.info("channel history fetched", {
+          msgId: msg.id,
+          channel,
+          count: raftRecentMessages.length,
+          durationMs: Date.now() - fetchStart,
+        });
+      } catch (err) {
+        this.log.warn("channel history fetch failed; continuing without it", {
+          msgId: msg.id,
+          channel,
+          error: errFields(err),
+        });
+      }
+    }
+
+    // 3. Drive the eve turn. clientContext carries ephemeral attribution
+    //    metadata per the eve client docs (not persisted to durable history).
+    //    `raft_target` is the thread target the reply should land in — the
+    //    `enqueue_raft_message` tool reads it so a tool call doesn't need to
+    //    recompute the DM/thread flip logic. `raft_recent_messages` gives the
+    //    agent conversational context for the current turn.
     const eveStart = Date.now();
     this.log.info("eve turn starting", { msgId: msg.id, channel });
     const eveResult = await this.eve.send(msg.body, {
@@ -318,11 +345,13 @@ export class Bridge {
       raft_author: msg.author,
       raft_target: threadTarget(msg),
       raft_requested_at: new Date().toISOString(),
+      raft_recent_messages: raftRecentMessages,
     });
     this.log.info("eve turn finished", {
       msgId: msg.id,
       sessionId: eveResult.sessionId,
       status: eveResult.status,
+      modelId: eveResult.modelId,
       durationMs: Date.now() - eveStart,
       chars: eveResult.text.length,
     });

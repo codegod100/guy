@@ -1,7 +1,8 @@
 // Thin wrapper around the `raft` CLI.
 //
-// The runner uses 6 commands from the 30 listed in raft.md:
+// The runner uses 7 commands from the 30 listed in raft.md:
 //   - raft message check           (non-blocking poll for new messages)
+//   - raft message read            (recent channel history for eve context)
 //   - raft task list               (survey the board for claimable work)
 //   - raft task claim              (claim-before-work)
 //   - raft task update             (status transitions: in_progress, in_review, done)
@@ -74,6 +75,19 @@ export type RaftMessage = {
   isTask: boolean;
   taskNumber?: number;
   /** Message type from the receipt header (e.g. "human", "agent", "system"). */
+  messageType?: string;
+};
+
+/**
+ * Trimmed shape for messages returned by `raft message read` — used to
+ * build channel context for eve. We strip server-only fields (seq, threadId,
+ * replyTarget) so the model only sees what it needs to follow the thread.
+ */
+export type RaftHistoryMessage = {
+  id: string;
+  author: string;
+  body: string;
+  time: string;
   messageType?: string;
 };
 
@@ -153,6 +167,24 @@ export class Raft {
       console.error(`[raft.messageCheck raw stdout]\n${stdout}`);
     }
     return stdout.length > 0 ? parseMessageCheck(stdout) : [];
+  }
+
+  /**
+   * Read recent message history for a channel, DM, or thread. Wraps
+   * `raft message read`; returns an empty array if the channel has no
+   * history. Caller should pass `limit` explicitly — without it the CLI
+   * uses the server's per-request default, which is larger than what we
+   * want to feed into the eve context.
+   */
+  async messageRead(
+    channel: string,
+    opts: { limit?: number; around?: string } = {},
+  ): Promise<RaftHistoryMessage[]> {
+    const args = ["message", "read", "--channel", channel];
+    if (opts.around) args.push("--around", opts.around);
+    if (opts.limit !== undefined) args.push("--limit", String(opts.limit));
+    const { stdout } = await this.exec(args);
+    return stdout.length > 0 ? parseMessageRead(stdout) : [];
   }
 
   /** List tasks on a channel's board. */
@@ -308,6 +340,61 @@ export function parseMessageCheck(stdout: string): RaftMessage[] {
     }
 
     out.push({ id, target, author, body, isTask, taskNumber, messageType });
+  }
+  return out;
+}
+
+/**
+ * Parse `raft message read` output. Format (one line per message):
+ *   [seq=<n> msg=<uuid> time=<iso> type=<human|agent> threadId=<uuid> replyTarget=<t>] <body...>
+ *
+ * Differences from parseMessageCheck:
+ *   - `seq` is a server-assigned monotonic number (separate from msg id).
+ *   - `msg` is a full UUID; messageCheck uses a short id.
+ *   - Adds `threadId` and `replyTarget` (we discard both — history consumers
+ *     don't need thread routing).
+ *   - Output is preceded by a "## Message History for X" header and trailed
+ *     by a "--- N messages shown." footer; we ignore both.
+ *
+ * Author extraction matches parseMessageCheck's `@handle:` prefix rule.
+ */
+export function parseMessageRead(stdout: string): RaftHistoryMessage[] {
+  const out: RaftHistoryMessage[] = [];
+  for (const rawLine of stdout.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    // Skip header/footer/blank noise.
+    if (line.startsWith("##")) continue;
+    if (line.startsWith("---")) continue;
+    if (line.startsWith("Your last read position")) continue;
+
+    const headerMatch = line.match(/^\[([^\]]+)\]\s*(.*)$/s);
+    if (!headerMatch) continue;
+    const header = headerMatch[1];
+    let body = headerMatch[2];
+
+    const id = (header.match(/msg=([^\s]+)/)?.[1] ?? "").trim();
+    // `time=YYYY-MM-DD HH:MM:SS` has a space in it, so match up to the next
+    // whitespace-bounded key (`type=`, `threadId=`, `replyTarget=`) or `]`.
+    const time =
+      (header.match(/time=(\S+(?:\s+\S+)??)(?=\s+(?:type=|threadId=|replyTarget=)|\])/)?.[1] ?? "").trim();
+    const messageType = (header.match(/type=(\w+)/)?.[1] ?? "").trim();
+    if (!id) continue;
+
+    // Same author rule as parseMessageCheck.
+    let author = "";
+    const authorPrefix = body.match(/^@([A-Za-z0-9_\-]+)\b[^:]*:\s*/);
+    if (authorPrefix) {
+      author = `@${authorPrefix[1]}`;
+      body = body.slice(authorPrefix[0].length);
+    }
+
+    // Strip the trailing task suffix the same way so the model sees clean
+    // bodies in history (matching what it sees for the current message).
+    const taskSuffix = body.match(/\[task\s+#(\d+)\s+status=(\w+)\]/);
+    if (taskSuffix) body = body.replace(taskSuffix[0], "").trim();
+
+    out.push({ id, author, body, time, messageType: messageType || undefined });
   }
   return out;
 }

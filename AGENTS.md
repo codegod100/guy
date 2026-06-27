@@ -6,4 +6,4 @@ To work on this project locally, you also need `devenv` installed and available 
 
 Store Markdown as external files rather than inline with code.
 
-jj is used for version control instead of git.
+jj is used for version control instead of git. dont use pager it breaks our agent

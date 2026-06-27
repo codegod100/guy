@@ -28,6 +28,7 @@ export function draftSummary(opts: {
   eveText: string;
   status: "completed" | "failed" | "waiting";
   sessionId?: string;
+  modelId?: string;
 }): { body: string } {
   const text = opts.eveText.trim();
   const statusLine =
@@ -40,6 +41,7 @@ export function draftSummary(opts: {
   const body =
     `Done.\n` +
     `**Status:** ${statusLine}\n` +
+    (opts.modelId ? `**Model:** ${opts.modelId}\n` : "") +
     (opts.sessionId ? `**Session:** ${opts.sessionId}\n` : "") +
     `\n---\n${text}`;
   return { body: redactForPublic(body) };

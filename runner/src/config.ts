@@ -27,6 +27,11 @@ export type RunnerConfig = {
   dbUrl: string;
   /** Optional libsql auth token. Falls back to `TURSO_AUTH_TOKEN`. */
   dbAuthToken?: string;
+  /**
+   * How many recent channel messages to fetch and pass to the eve agent as
+   * context for each turn. 0 disables the fetch entirely.
+   */
+  channelHistoryLimit: number;
 };
 
 function required(name: string): string {
@@ -90,5 +95,6 @@ export function loadConfig(): RunnerConfig {
     raftBin: optional("RAFT_BIN", "raft"),
     dbUrl,
     dbAuthToken: pickEnv("RUNNER_DB_AUTH_TOKEN", "TURSO_AUTH_TOKEN") || undefined,
+    channelHistoryLimit: parsePositiveInt("RUNNER_CHANNEL_HISTORY_LIMIT", 10),
   };
 }

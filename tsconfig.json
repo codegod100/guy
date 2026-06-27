@@ -22,6 +22,8 @@
     ],
     "paths": {
       "@/*": ["./*"],
+      "@ai-sdk/provider-v4": ["./node_modules/@ai-sdk/openai-compatible/node_modules/@ai-sdk/provider"],
+      "@ai-sdk/provider-v4/*": ["./node_modules/@ai-sdk/openai-compatible/node_modules/@ai-sdk/provider/*"],
     },
   },
   "include": [
