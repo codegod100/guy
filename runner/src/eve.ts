@@ -42,8 +42,10 @@ export class Eve {
    *
    * `clientContext` is an ephemeral hint for the next model call only
    * (per the eve client docs); we use it to inject Raft-side metadata
-   * (channel, task number, requester handle) so the eve-side harness
-   * can attribute its work without it leaking into durable history.
+   * (channel, task number, requester handle, computed reply target) so the
+   * eve-side harness can attribute its work and the `enqueue_raft_message`
+   * tool knows where to post by default — without any of it leaking into
+   * durable session history.
    */
   async send(
     message: string,

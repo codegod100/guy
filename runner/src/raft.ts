@@ -1,11 +1,12 @@
 // Thin wrapper around the `raft` CLI.
 //
-// The runner uses 5 commands from the 30 listed in raft.md:
+// The runner uses 6 commands from the 30 listed in raft.md:
 //   - raft message check           (non-blocking poll for new messages)
 //   - raft task list               (survey the board for claimable work)
 //   - raft task claim              (claim-before-work)
 //   - raft task update             (status transitions: in_progress, in_review, done)
 //   - raft message send            (post progress + summary)
+//   - raft message react           (add the runner's 👀 ack on the inbound msg)
 //
 // `raft message check` calls the CLI as usual, but the runner keeps its own
 // `seenMessageIds` set (see bridge.ts) because in `self-hosted-runner` mode
@@ -204,6 +205,29 @@ export class Raft {
     );
     const id = parseSentMessageId(stdout);
     return { messageId: id };
+  }
+
+  /**
+   * Add or remove a reaction on an existing message. The CLI's agent guidance
+   * (see `raft message react --help`) tells us to use reactions only as a
+   * clear acknowledgement — the runner sticks to 👀 for inbound messages and
+   * doesn't fan out celebratory emoji on every task completion.
+   */
+  async messageReact(
+    messageId: string,
+    emoji: string,
+    opts: { remove?: boolean } = {},
+  ): Promise<void> {
+    const args = [
+      "message",
+      "react",
+      "--message-id",
+      messageId,
+      "--emoji",
+      emoji,
+    ];
+    if (opts.remove) args.push("--remove");
+    await this.exec(args);
   }
 }
 

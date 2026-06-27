@@ -13,6 +13,7 @@ import { Raft } from "./raft.ts";
 import { Eve } from "./eve.ts";
 import { Bridge } from "./bridge.ts";
 import { MessageStore } from "./store.ts";
+import { OutboundQueue } from "./queue.ts";
 import { parseArgs, runCommand } from "./cli.ts";
 import { getLogger, errFields } from "./logger.ts";
 
@@ -56,10 +57,12 @@ async function main(): Promise<void> {
   // Default: start the bridge. Open the store first; if libsql can't reach
   // the configured URL we want to fail fast at startup rather than silently
   // fall back to an in-memory dedup (which would re-process everything on
-  // the next restart).
+  // the next restart). The outbound queue shares the same connection params
+  // (same Turso database) so tools can write rows the runner drains.
   const store = await MessageStore.open(cfg.dbUrl, cfg.dbAuthToken);
+  const queue = await OutboundQueue.open(cfg.dbUrl, cfg.dbAuthToken);
   const eve = new Eve(cfg);
-  const bridge = new Bridge(cfg, raft, eve, store);
+  const bridge = new Bridge(cfg, raft, eve, store, queue);
 
   // Liveness check before entering the loop — surface a clear warning if eve
   // is unreachable so the user knows to start it. The bridge continues; once
@@ -84,6 +87,7 @@ async function main(): Promise<void> {
     // Best-effort close: libsql will also close on process exit. We don't
     // block on it so Ctrl+C feels responsive.
     void store.close();
+    void queue.close();
     process.exit(code);
   };
   process.on("SIGINT", () => stop("SIGINT", 130));
@@ -91,6 +95,7 @@ async function main(): Promise<void> {
 
   await bridge.start();
   await store.close();
+  await queue.close();
   log.info("runner stopped");
 }
 

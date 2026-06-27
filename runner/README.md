@@ -109,9 +109,39 @@ Happy path only:
 
 1. Poll Raft for new messages.
 2. Claim the task (`raft task claim`) before doing anything.
-3. Drive one eve turn via `Client.session().send(...)`.
-4. Post a summary back to the task's thread.
-5. Mark the task `in_review` (a human must approve → `done`).
+3. Acknowledge with a 👀 reaction (`raft message react`) on the inbound message — no new "Acknowledged." post.
+4. Drive one eve turn via `Client.session().send(...)`.
+5. Post a summary back to the task's thread.
+6. Mark the task `in_review` (a human must approve → `done`).
+7. Drain the outbound queue (`pending_messages` table) — see "Outbound queue" below.
 
-Out of scope for v1: reminders, attachments, reactions, parallel subtask
-splitting, multiple eve sessions per task.
+Out of scope for v1: attachments, parallel subtask splitting,
+multiple eve sessions per task.
+
+## Outbound queue
+
+Eve tools can enqueue Raft posts from inside an agent turn via the
+`enqueue_raft_message` tool (`agent/tools/enqueue_raft_message.ts`).
+The runner drains `pending_messages` at the start of every poll tick
+and forwards due rows via `raft message send`. Both the tool and the
+runner read/write the same Turso database.
+
+```ts
+// Inside an eve turn, after some "background work":
+await enqueueRaftMessage({
+  body: "Reminder: standup in 5 minutes",
+  target: "#general",          // or `raft_target` from clientContext to reply in-thread
+  sendAfter: "2026-06-27T14:55:00Z",  // optional; omit for ASAP
+});
+```
+
+Drain semantics:
+
+- Up to 5 rows per poll tick (`MAX_DRAIN_PER_TICK`).
+- A row with `send_after` in the future is skipped until its time.
+- Send failures bump `attempts` and keep the row `pending`; after 5 attempts the row is marked terminal `failed`.
+
+The runner injects a `raft_target` field into every eve turn's
+clientContext — the precomputed thread target the reply should land in.
+The model reads it from context and passes it as `target` when posting
+back to the originating thread.

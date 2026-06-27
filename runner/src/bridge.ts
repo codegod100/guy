@@ -20,7 +20,8 @@ import type { Eve } from "./eve.ts";
 import type { Raft, RaftMessage, RaftTask } from "./raft.ts";
 import { RaftCallError } from "./raft.ts";
 import type { MessageStore, SeenStatus } from "./store.ts";
-import { draftMessageAck, draftProgress, draftSummary, draftTaskAck } from "./messages.ts";
+import type { OutboundQueue } from "./queue.ts";
+import { draftProgress, draftSummary } from "./messages.ts";
 import { getLogger, errFields } from "./logger.ts";
 
 export class Bridge {
@@ -50,11 +51,20 @@ export class Bridge {
    */
   private readonly seenMessageIds = new Set<string>();
 
+  /**
+   * Max rows drained from the outbound queue per poll tick. Bounds work per
+   * tick so a large backlog doesn't starve inbound message handling.
+   */
+  private static readonly MAX_DRAIN_PER_TICK = 5;
+  /** Send attempts before a queued message is marked terminal 'failed'. */
+  private static readonly MAX_SEND_ATTEMPTS = 5;
+
   constructor(
     private readonly cfg: RunnerConfig,
     private readonly raft: Raft,
     private readonly eve: Eve,
     private readonly store: MessageStore,
+    private readonly queue: OutboundQueue,
   ) {}
 
   private async markSeen(id: string, status: SeenStatus): Promise<void> {
@@ -120,6 +130,12 @@ export class Bridge {
    * simplicity), claim it and run the eve turn.
    */
   private async tick(): Promise<void> {
+    // Drain the outbound queue before polling raft. Anything enqueued by
+    // eve tools in prior turns (or by a previous runner instance) gets a
+    // chance to land before we pull new work — keeps the queue's steady-
+    // state lag bounded by `pollIntervalMs` rather than `(2 × interval)`.
+    await this.drainQueue();
+
     const messages = await this.raft.messageCheck();
     if (messages.length === 0) return;
 
@@ -147,6 +163,53 @@ export class Bridge {
           target: msg.target,
           error: errFields(err),
         });
+      }
+    }
+  }
+
+  /**
+   * Pull up to {@link MAX_DRAIN_PER_TICK} due rows from the outbound queue
+   * and post each one to raft. Transient failures bump `attempts`; after
+   * {@link MAX_SEND_ATTEMPTS} the row is marked terminal 'failed' so it
+   * stops competing for drain slots.
+   *
+   * Each row's send is wrapped in its own try/catch so one bad target
+   * (e.g. a typo from a tool) doesn't stall the rest of the batch.
+   */
+  private async drainQueue(): Promise<void> {
+    const due = await this.queue.claimReady(Bridge.MAX_DRAIN_PER_TICK);
+    if (due.length === 0) return;
+    this.log.info("queue draining", { count: due.length });
+
+    for (const m of due) {
+      try {
+        await this.raft.messageSend(m.target, m.body);
+        await this.queue.markSent(m.id);
+        this.log.info("queue sent", {
+          id: m.id,
+          target: m.target,
+          attempts: m.attempts,
+        });
+      } catch (err) {
+        const error = err instanceof Error ? err.message : String(err);
+        const nextAttempts = m.attempts + 1;
+        if (nextAttempts >= Bridge.MAX_SEND_ATTEMPTS) {
+          await this.queue.markFailed(m.id, error);
+          this.log.error("queue send failed permanently", {
+            id: m.id,
+            target: m.target,
+            attempts: nextAttempts,
+            error,
+          });
+        } else {
+          await this.queue.recordFailure(m.id, error);
+          this.log.warn("queue send failed; will retry", {
+            id: m.id,
+            target: m.target,
+            attempts: nextAttempts,
+            error,
+          });
+        }
       }
     }
   }
@@ -230,42 +293,30 @@ export class Bridge {
   }
 
   /**
-   * Run one eve turn for the claimed task: ack → call eve → post summary
+   * Run one eve turn for the claimed task: ack-react → call eve → post summary
    * → mark in_review. We do NOT mark done — that requires human approval
    * per raft.md's `in_review → done` gate.
    */
   private async runTurn(channel: string, msg: RaftMessage): Promise<void> {
-    const plan = [
-      "Read the request and pull relevant context from the eve agent.",
-      "Run the eve turn and stream the response.",
-      "Post a summary back to this thread and mark the task in_review.",
-    ];
-
-    // 1. Ack. Task messages get the title + plan layout; plain messages just
-    //    get a one-liner so we don't fake a task structure on a conversational
-    //    turn.
-    const ack = msg.isTask
-      ? draftTaskAck({
-          taskTitle: msg.body.split("\n")[0]?.slice(0, 120) || "(no title)",
-          plan,
-        })
-      : draftMessageAck();
-    const ackTarget = threadTarget(msg);
-    const ackSent = await this.raft.messageSend(ackTarget, ack.body);
-    await this.markSeen(ackSent.messageId, "skipped");
-    this.log.info("ack posted", {
-      thread: ackTarget,
-      raftMsgId: ackSent.messageId,
-    });
+    // 1. Acknowledge with a 👀 reaction on the inbound message. Reactions are
+    //    cheap (no new message posted to the channel), align with raft.md's
+    //    "use sparingly for acknowledgement" guidance, and skip the noise of
+    //    a "Acknowledged." post on every poll.
+    await this.raft.messageReact(msg.id, "👀");
+    this.log.info("ack reacted", { msgId: msg.id, emoji: "👀" });
 
     // 2. Drive the eve turn. clientContext carries ephemeral attribution
     // metadata per the eve client docs (not persisted to durable history).
+    // `raft_target` is the thread target the reply should land in — the
+    // `enqueue_raft_message` tool reads it so a tool call doesn't need to
+    // recompute the DM/thread flip logic.
     const eveStart = Date.now();
     this.log.info("eve turn starting", { msgId: msg.id, channel });
     const eveResult = await this.eve.send(msg.body, {
       raft_channel: channel,
       raft_message_id: msg.id,
       raft_author: msg.author,
+      raft_target: threadTarget(msg),
       raft_requested_at: new Date().toISOString(),
     });
     this.log.info("eve turn finished", {
