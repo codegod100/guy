@@ -22,7 +22,7 @@ in
 
   # Bun is used as the package manager
   languages.javascript.enable = true;
-
+  dotenv.enable = true;
   scripts.deploy = {
     exec = "vercel deploy --prod --yes";
     description = "Deploy to Vercel production";

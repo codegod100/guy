@@ -10,6 +10,11 @@
     "build": "next build",
     "dev": "next dev",
     "dev:webpack": "next dev --webpack",
+    "runner": "NODE_NO_WARNINGS=1 node --env-file-if-exists=.env --env-file-if-exists=.env.local --experimental-transform-types runner/src/main.ts",
+    "runner:debug": "NODE_NO_WARNINGS=1 LOG_LEVEL=debug node --env-file-if-exists=.env --env-file-if-exists=.env.local --experimental-transform-types runner/src/main.ts",
+    "runner:debug-message": "NODE_NO_WARNINGS=1 LOG_LEVEL=debug RUNNER_DEBUG_MESSAGE_CHECK=1 node --env-file-if-exists=.env --env-file-if-exists=.env.local --experimental-transform-types runner/src/main.ts",
+    "runner:json": "NODE_NO_WARNINGS=1 LOG_FORMAT=json node --env-file-if-exists=.env --env-file-if-exists=.env.local --experimental-transform-types runner/src/main.ts",
+    "runner:watch": "NODE_NO_WARNINGS=1 node --env-file-if-exists=.env --env-file-if-exists=.env.local --experimental-transform-types --watch runner/src/main.ts",
     "start": "next start",
     "typecheck": "tsgo --noEmit -p tsconfig.json",
     "prepare": "node scripts/inline-cowsay-cows.mjs"
@@ -46,6 +51,7 @@
     "tailwind-merge": "3.6.0",
     "tailwindcss": "4.3.0",
     "use-stick-to-bottom": "1.1.4",
+    "vercel-minimax-ai-provider": "^0.0.2",
     "zod": "4.4.3"
   },
   "devDependencies": {

@@ -1,6 +1,6 @@
 import { defineAgent } from "eve";
-import { deepseek } from "@ai-sdk/deepseek";
+import { minimaxOpenAI } from "vercel-minimax-ai-provider";
 
 export default defineAgent({
-  model: deepseek("deepseek-v4-pro"),
+  model: minimaxOpenAI("MiniMax-M3"),
 });
