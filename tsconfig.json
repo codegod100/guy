@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/tsconfig",
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["dom", "dom.iterable", "esnext"],
+    "lib": ["ES2023"],
     "allowJs": true,
     "skipLibCheck": true,
     "strict": true,
@@ -13,26 +13,11 @@
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "jsx": "react-jsx",
     "incremental": true,
-    "plugins": [
-      {
-        "name": "next",
-      },
-    ],
     "paths": {
-      "@/*": ["./*"],
-      "@ai-sdk/provider-v4": ["./node_modules/@ai-sdk/openai-compatible/node_modules/@ai-sdk/provider"],
-      "@ai-sdk/provider-v4/*": ["./node_modules/@ai-sdk/openai-compatible/node_modules/@ai-sdk/provider/*"],
-    },
+      "#*": ["./agent/*"]
+    }
   },
-  "include": [
-    "next-env.d.ts",
-    "**/*.ts",
-    "**/*.tsx",
-    ".eve/**/*.d.ts",
-    ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts",
-  ],
-  "exclude": ["node_modules"],
+  "include": ["**/*.ts", ".eve/**/*.d.ts"],
+  "exclude": ["node_modules"]
 }

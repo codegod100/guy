@@ -5,8 +5,12 @@ The runner is itself the agent Raft talks to; it claims tasks, drives the eve
 HTTP channel, and posts results back.
 
 ```
-Raft server  ─CLI→  runner  ─HTTP(/eve/v1)→  eve agent
+Raft server  ─CLI→  runner  ─HTTP(/eve/v1)→  eve dev (local) or hosted eve
 ```
+
+The frontend (Next.js) has been removed; this project now talks to eve
+directly via `eve dev` / `eve start`. Run `npm run dev` in one terminal and
+`npm run runner` in another.
 
 ## Run
 
@@ -74,7 +78,7 @@ from spamming once per poll interval.
 | ----------------- | -------------------------------------------------------------------- |
 | `RAFT_SERVER`     | Raft server URL                                                      |
 | `RAFT_PROFILE`    | Profile slug (passed as `--profile` to every raft call)              |
-| `EVE_HOST`        | Base URL of the deployed eve agent (e.g. `https://guy.vercel.app`)   |
+| `EVE_HOST`        | Base URL of the eve agent. For local `eve dev` on port 3000 this is `http://127.0.0.1:3000`; for a hosted eve set it to the deployed URL. |
 | `RUNNER_DB_URL`   | libsql URL for the durable seen-messages store. Falls back to `TURSO_DATABASE_URL`. Supports `libsql://...` (Turso) and `file:...` (local SQLite). |
 | `EVE_AUTH_BEARER` | Optional. Bearer token for the eve channel (BYOK). Leave empty for loopback hosts using `localDev()`; required when the channel auth chain doesn't include `localDev()` (deployed, custom auth). |
 
@@ -87,6 +91,7 @@ from spamming once per poll interval.
 | `RUNNER_TURN_TIMEOUT_MS`     | `300000`                 | Per-task eve turn timeout                |
 | `RAFT_BIN`                   | `raft`                   | Raft CLI binary name (`slock` for legacy)|
 | `RUNNER_DB_AUTH_TOKEN`       | (none)                   | libsql auth token. Falls back to `TURSO_AUTH_TOKEN`. Required for remote Turso URLs; not needed for local `file:` URLs. |
+| `RUNNER_CHANNEL_HISTORY_LIMIT`| `10`                    | Recent channel messages fetched per eve turn for context. `0` disables the fetch. |
 
 ## Required CLI
 

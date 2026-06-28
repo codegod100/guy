@@ -369,6 +369,8 @@ export class Bridge {
       eveText: eveResult.text,
       status: eveResult.status,
       sessionId: eveResult.sessionId,
+      modelId: eveResult.modelId,
+      maxChars: this.cfg.summaryMaxChars,
     });
     const summaryTarget = threadTarget(msg);
     const summarySent = await this.raft.messageSend(

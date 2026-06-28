@@ -13,7 +13,7 @@ import type {
   LanguageModelV4Usage,
   SharedV4ProviderMetadata,
   SharedV4Warning,
-} from "@ai-sdk/provider-v4";
+} from "@ai-sdk/provider";
 import type { FetchFunction } from "@ai-sdk/provider-utils";
 import {
   combineHeaders,
@@ -33,6 +33,15 @@ type OpenAICompatibleLanguageModelConfig = {
   apiKey?: string;
   headers?: () => Record<string, string | undefined>;
   fetch?: FetchFunction;
+  /**
+   * Hard cap on tokens generated per turn. The value is forwarded as
+   * `max_tokens` in the chat-completions request body. Most OpenAI-
+   * compatible providers honor it; setting it is the primary lever for
+   * keeping the assistant's replies short — capping at the runner level
+   * just truncates an already-long reply, but capping here forces the
+   * model to fit its answer inside the budget.
+   */
+  maxTokens?: number;
 };
 
 type OAIChatMessage =
@@ -354,7 +363,10 @@ function convertTools(
   return { tools: out, warnings };
 }
 
-function buildBody(options: LanguageModelV4CallOptions): {
+function buildBody(
+  options: LanguageModelV4CallOptions,
+  config: OpenAICompatibleLanguageModelConfig,
+): {
   body: OAIChatRequestBody;
   warnings: SharedV4Warning[];
 } {
@@ -388,7 +400,14 @@ function buildBody(options: LanguageModelV4CallOptions): {
     model: "",
     messages,
   };
-  if (options.maxOutputTokens !== undefined) body.max_tokens = options.maxOutputTokens;
+  // Per-turn `maxOutputTokens` wins over the model-config default.
+  // Config default applies when the harness doesn't pin a value, which is
+  // the common case — that's the lever for "make this model terser".
+  if (options.maxOutputTokens !== undefined) {
+    body.max_tokens = options.maxOutputTokens;
+  } else if (config.maxTokens !== undefined) {
+    body.max_tokens = config.maxTokens;
+  }
   if (options.temperature !== undefined) body.temperature = options.temperature;
   if (options.topP !== undefined) body.top_p = options.topP;
   if (options.frequencyPenalty !== undefined) body.frequency_penalty = options.frequencyPenalty;
@@ -449,7 +468,7 @@ export class OpenAICompatibleLanguageModelV4 implements LanguageModelV4 {
   }
 
   async doGenerate(options: LanguageModelV4CallOptions): Promise<LanguageModelV4GenerateResult> {
-    const { body, warnings } = buildBody(options);
+    const { body, warnings } = buildBody(options, this.config);
     body.model = this.modelId;
 
     const providerOpts = await parseProviderOptions({
@@ -513,7 +532,7 @@ export class OpenAICompatibleLanguageModelV4 implements LanguageModelV4 {
   }
 
   async doStream(options: LanguageModelV4CallOptions): Promise<LanguageModelV4StreamResult> {
-    const { body, warnings } = buildBody(options);
+    const { body, warnings } = buildBody(options, this.config);
     body.model = this.modelId;
     body.stream = true;
 
@@ -535,6 +554,7 @@ export class OpenAICompatibleLanguageModelV4 implements LanguageModelV4 {
     let reasoningStarted = false;
     const toolCallIds = new Map<number, string>();
     const toolCallNames = new Map<number, string>();
+    const toolCallArgs = new Map<number, string>();
     let lastUsage: z.infer<typeof usageSchema> | undefined;
     let lastFinishReason: LanguageModelV4FinishReason = {
       unified: "other",
@@ -613,6 +633,7 @@ const stream = (response as ReadableStream<ChunkResult>).pipeThrough(
                 toolCallIds.set(tc.index, toolCallId);
                 const toolName = tc.function?.name ?? "";
                 toolCallNames.set(tc.index, toolName);
+                toolCallArgs.set(tc.index, "");
                 controller.enqueue({
                   type: "tool-input-start",
                   id: toolCallId,
@@ -622,6 +643,10 @@ const stream = (response as ReadableStream<ChunkResult>).pipeThrough(
                 toolCallNames.set(tc.index, tc.function.name);
               }
               if (tc.function?.arguments) {
+                toolCallArgs.set(
+                  tc.index,
+                  (toolCallArgs.get(tc.index) ?? "") + tc.function.arguments,
+                );
                 controller.enqueue({
                   type: "tool-input-delta",
                   id: toolCallId,
@@ -648,7 +673,7 @@ const stream = (response as ReadableStream<ChunkResult>).pipeThrough(
               type: "tool-call",
               toolCallId,
               toolName: toolCallNames.get(index) ?? "",
-              input: "",
+              input: toolCallArgs.get(index) ?? "",
             });
           }
           if (!finishEmitted) {

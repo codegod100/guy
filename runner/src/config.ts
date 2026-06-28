@@ -32,6 +32,13 @@ export type RunnerConfig = {
    * context for each turn. 0 disables the fetch entirely.
    */
   channelHistoryLimit: number;
+  /**
+   * Maximum characters of the eve assistant text to include in the summary
+   * posted back to Raft. Longer responses are truncated with a trailing
+   * marker so the user can see what was cut. 0 disables the cap (not
+   * recommended — large posts can hit Raft server limits).
+   */
+  summaryMaxChars: number;
 };
 
 function required(name: string): string {
@@ -96,5 +103,23 @@ export function loadConfig(): RunnerConfig {
     dbUrl,
     dbAuthToken: pickEnv("RUNNER_DB_AUTH_TOKEN", "TURSO_AUTH_TOKEN") || undefined,
     channelHistoryLimit: parsePositiveInt("RUNNER_CHANNEL_HISTORY_LIMIT", 10),
+    summaryMaxChars: parseNonNegativeInt("RUNNER_SUMMARY_MAX_CHARS", 4_000),
   };
+}
+
+/**
+ * Like {@link parsePositiveInt} but accepts 0 so callers can disable a cap.
+ * Used for `RUNNER_SUMMARY_MAX_CHARS` since "unlimited" is a legitimate
+ * choice even if the default applies a sensible bound.
+ */
+function parseNonNegativeInt(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 0) {
+    throw new Error(
+      `runner: env var ${name} must be a non-negative integer, got "${raw}"`,
+    );
+  }
+  return n;
 }
